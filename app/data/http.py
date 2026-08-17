@@ -10,7 +10,7 @@ from app.data.exceptions import (
 )
 
 
-def fetch_json(client: httpx.Client, url: str) -> dict:
+def _fetch(client: httpx.Client, url: str) -> httpx.Response:
     try:
         response = client.get(url)
     except httpx.TimeoutException as exc:
@@ -25,7 +25,16 @@ def fetch_json(client: httpx.Client, url: str) -> dict:
     if response.status_code >= 400:
         raise SECHTTPError(f"{response.status_code} for {url}")
 
+    return response
+
+
+def fetch_json(client: httpx.Client, url: str) -> dict:
+    response = _fetch(client, url)
     try:
         return response.json()
     except ValueError as exc:
         raise SECMalformedResponseError(url) from exc
+
+
+def fetch_text(client: httpx.Client, url: str) -> str:
+    return _fetch(client, url).text

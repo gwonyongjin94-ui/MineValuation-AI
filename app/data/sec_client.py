@@ -4,7 +4,7 @@ from typing import Self
 import httpx
 
 from app.config import get_settings
-from app.data.http import fetch_json
+from app.data.http import fetch_json, fetch_text
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 COMPANY_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
@@ -40,6 +40,16 @@ class SECClient:
 
     def get_company_facts(self, cik: str) -> dict:
         return self._get(COMPANY_FACTS_URL.format(cik=cik))
+
+    def get_document(self, url: str) -> str:
+        """Fetch an arbitrary SEC document (e.g. a 10-K/10-Q filing) as raw text.
+
+        Shares this client's throttle with get_submissions/get_company_facts -
+        www.sec.gov and data.sec.gov both fall under SEC's one fair-access
+        rate limit, not separate per-subdomain budgets.
+        """
+        self._throttle()
+        return fetch_text(self._client, url)
 
     def _get(self, url: str) -> dict:
         self._throttle()

@@ -105,3 +105,37 @@ GOOGL/MSFT/AAPL/HBB 전부 `AssetsCurrent`, `LiabilitiesCurrent`,
    이후 restated 버전이 있으면 별도로 노출한다(자동으로 최신값에 덮어쓰지 않는다).
 4. `valuation_category` 분류(SIC 기반)는 정규화 파이프라인의 맨 앞단에서 실행한다.
 5. D&A/CapEx/short-term debt 모두 revenue와 동일한 fallback chain 패턴을 쓴다.
+
+---
+
+## V2 — 10-K/10-Q 본문 HTML 구조 spike
+
+V2에서 Risk Factors/MD&A를 자동으로 섹션 단위로 잘라낼 수 있는지 확인하기 위해
+AAPL과 MSFT의 최신 10-K 원문 HTML(inline XBRL)을 직접 받아 비교했다.
+
+**AAPL (Workiva 생성 문서)**: 목차가 `<a href="#i719388...52">Item 1A.</a>` 형태로
+실제 섹션의 `id="i719388...52"` 앵커에 하이퍼링크돼 있다. Item 1A와 Item 1B
+앵커 사이를 그대로 슬라이싱하면 Risk Factors 섹션만 정확히 떨어져 나온다.
+
+**MSFT**: 같은 방식이 전혀 안 통한다. 목차에 하이퍼링크 자체가 없고
+"Item 1A"라는 텍스트가 (인용/각주 등으로) 문서 전체에 21번 등장하는데
+그중 무엇이 실제 섹션 시작인지 구분할 앵커가 없다.
+
+즉 **filer(문서 생성 대행사)마다 10-K HTML 구조가 완전히 다르다** — SEC가
+Item 단위로 파싱해서 제공하는 공식 API도 없다. 이건 V1에서 기업마다 XBRL
+태그가 다르게 나온 것과 같은 종류의 문제이지만, 여기서는 fallback chain으로
+해결할 수 있는 수준이 아니라(회사마다 완전히 다른 HTML 구조) 범용 파서를
+만들려면 훨씬 큰 투자가 필요하다.
+
+**결정**: 섹션 단위로 자르지 않고, `clean_filing_html()`로 스크립트/스타일/
+숨겨진 inline-XBRL 메타데이터 블록(`display:none`)만 제거한 뒤 **문서 전체를
+LLM에 넘긴다.** 섹션을 찾는 부담을 파서가 아니라 LLM의 독해력에 맡기는 선택.
+
+정리 후 텍스트 크기(참고용, AAPL/MSFT 최신 10-K 기준):
+
+| 기업 | 원본 HTML | 정리 후 텍스트 | 대략 토큰 수 |
+|---|---|---|---|
+| AAPL | 1.5MB | 208,370자 | ~52,000 |
+| MSFT | 8.5MB | 336,285자 | ~84,000 |
+
+두 경우 다 Claude 컨텍스트 윈도우 안에 여유 있게 들어간다.
