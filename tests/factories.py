@@ -1,4 +1,5 @@
 import json
+from types import SimpleNamespace
 
 import httpx
 
@@ -67,11 +68,16 @@ def sec_facts(tag_entries: dict, taxonomy: str = "us-gaap", unit: str = "USD") -
     }
 
 
-def build_mock_sec_client(submissions: dict, company_facts: dict) -> SECClient:
+def build_mock_sec_client(
+    submissions: dict, company_facts: dict, document_html: str | None = None
+) -> SECClient:
     def handler(request: httpx.Request) -> httpx.Response:
-        if "submissions" in str(request.url):
+        url = str(request.url)
+        if "submissions" in url:
             return httpx.Response(200, json=submissions)
-        return httpx.Response(200, json=company_facts)
+        if "companyfacts" in url:
+            return httpx.Response(200, json=company_facts)
+        return httpx.Response(200, text=document_html or "<html><body>test filing</body></html>")
 
     transport = httpx.MockTransport(handler)
     return SECClient(user_agent="test", min_interval=0, client=httpx.Client(transport=transport))
@@ -93,6 +99,14 @@ STANDARD_SUBMISSIONS = {
     "name": "Test Standard Co",
     "sic": "3571",
     "sicDescription": "Electronic Computers",
+    "filings": {
+        "recent": {
+            "form": ["10-K"],
+            "accessionNumber": ["0000999999-25-000001"],
+            "filingDate": ["2025-02-01"],
+            "primaryDocument": ["tstx-10k.htm"],
+        }
+    },
 }
 
 BANK_SUBMISSIONS = {
@@ -167,3 +181,21 @@ def bank_company_facts() -> dict:
         ],
     }
     return {"cik": 888888, "entityName": "Test Bank Co", **sec_facts(tags)}
+
+
+def fake_anthropic_client(risks: list | None = None, summary: str = "", no_tool_use: bool = False):
+    """A stand-in for anthropic.Anthropic matching only what extract_risks() calls."""
+    content = []
+    if not no_tool_use:
+        content.append(
+            SimpleNamespace(type="tool_use", input={"risks": risks or [], "summary": summary})
+        )
+    response = SimpleNamespace(
+        content=content, usage=SimpleNamespace(input_tokens=100, output_tokens=50)
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return response
+
+    return SimpleNamespace(messages=FakeMessages())

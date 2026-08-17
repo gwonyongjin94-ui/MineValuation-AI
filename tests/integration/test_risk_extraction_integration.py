@@ -24,7 +24,9 @@ def test_extract_risks_real_aapl_filing():
     sec_client.close()
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    result = extract_risks(client, document)
+    result = extract_risks(
+        client, document.text, document.form, source_accession_number=document.accession_number
+    )
 
     assert 1 <= len(result.risks) <= 8
     assert result.summary

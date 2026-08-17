@@ -1,10 +1,16 @@
-"""LLM-based qualitative risk extraction from a cleaned filing document.
+"""LLM-based qualitative risk extraction from a block of company text.
+
+Works on either an SEC filing's cleaned text or a user-pasted earnings
+call transcript - same extraction logic either way, only the source
+label and (for filings) the accession number differ. Earnings calls
+aren't SEC data and V2 doesn't fetch them automatically (no free,
+reliable source); the caller supplies the transcript text directly.
 
 Section-level extraction (Risk Factors only, MD&A only) was tried and
-rejected - see docs/DATA_SPIKE_NOTES.md's V2 section. The whole cleaned
-document is handed to the model instead; spiked against a real AAPL
-10-K (~48k input tokens on Haiku, a few cents) and the output was
-grounded in specific filing details (the actual DMA fine amount,
+rejected for filings - see docs/DATA_SPIKE_NOTES.md's V2 section. The
+whole cleaned document is handed to the model instead; spiked against a
+real AAPL 10-K (~48k input tokens on Haiku, a few cents) and the output
+was grounded in specific filing details (the actual DMA fine amount,
 Greater China sales figures) rather than generic summary - see
 scripts/spike_qualitative_risk.py.
 
@@ -17,19 +23,17 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from app.data.filing_documents import FilingDocument
-
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_RISKS = 8
 
-_PROMPT = """You are analyzing the Risk Factors and MD&A content of a company's {form} filing.
+_PROMPT = """You are analyzing the following {source_label} content for a company.
 
 Extract the most material, company-specific qualitative risks - not generic industry
 boilerplate that would apply to almost any company in the sector. Ground every risk in
-what the filing text actually says, not general knowledge about the company. List at
-most {max_risks} risks, ordered by materiality, then give a 2-3 sentence overall summary.
+what the text actually says, not general knowledge about the company. List at most
+{max_risks} risks, ordered by materiality, then give a 2-3 sentence overall summary.
 
-Filing text follows:
+Text follows:
 ---
 {text}
 ---
@@ -37,7 +41,7 @@ Filing text follows:
 
 _TOOL = {
     "name": "record_qualitative_risks",
-    "description": "Record the material, company-specific qualitative risks found in a filing.",
+    "description": "Record the material, company-specific qualitative risks found in the text.",
     "input_schema": {
         "type": "object",
         "properties": {
@@ -81,8 +85,8 @@ class QualitativeRisk(BaseModel):
 
 
 class QualitativeRiskAnalysis(BaseModel):
-    source_form: str
-    source_accession_number: str
+    source_label: str
+    source_accession_number: str | None = None
     model: str
     risks: list[QualitativeRisk]
     summary: str
@@ -95,7 +99,11 @@ class QualitativeAnalysisError(Exception):
 
 
 def extract_risks(
-    client, filing: FilingDocument, model: str = DEFAULT_MODEL
+    client,
+    text: str,
+    source_label: str,
+    source_accession_number: str | None = None,
+    model: str = DEFAULT_MODEL,
 ) -> QualitativeRiskAnalysis:
     response = client.messages.create(
         model=model,
@@ -106,7 +114,7 @@ def extract_risks(
             {
                 "role": "user",
                 "content": _PROMPT.format(
-                    form=filing.form, max_risks=MAX_RISKS, text=filing.text
+                    source_label=source_label, max_risks=MAX_RISKS, text=text
                 ),
             }
         ],
@@ -117,8 +125,8 @@ def extract_risks(
         raise QualitativeAnalysisError("model did not return the expected tool call")
 
     return QualitativeRiskAnalysis(
-        source_form=filing.form,
-        source_accession_number=filing.accession_number,
+        source_label=source_label,
+        source_accession_number=source_accession_number,
         model=model,
         risks=tool_use.input["risks"],
         summary=tool_use.input["summary"],

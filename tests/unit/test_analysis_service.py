@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 
 from app.data.exceptions import UnknownTickerError
+from app.qualitative.risk_extraction import QualitativeAnalysisError
 from app.services.analysis_service import analyze
 from app.valuation.assumptions import ValuationAssumptions
 from tests.factories import (
@@ -11,6 +12,7 @@ from tests.factories import (
     bank_company_facts,
     build_mock_sec_client,
     build_ticker_map_with_cache,
+    fake_anthropic_client,
     standard_company_facts,
 )
 
@@ -73,3 +75,71 @@ def test_analyze_unknown_ticker_raises(tmp_path):
             client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
             ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
         )
+
+
+def test_analyze_10k_adds_qualitative_analysis_and_source(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        analyze_10k=True,
+        anthropic_client=fake_anthropic_client(
+            risks=[{"label": "X", "description": "Y", "status": "emerging", "severity": "low"}],
+            summary="minor risks only",
+        ),
+    )
+
+    assert len(result.qualitative_analyses) == 1
+    assert result.qualitative_analyses[0].source_label == "10-K"
+    assert len(result.sources) == 3
+
+
+def test_analyze_earnings_call_text_produces_separate_analysis(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        earnings_call_text="management discussed headwinds in the call",
+        anthropic_client=fake_anthropic_client(risks=[], summary="no major new risks"),
+    )
+
+    assert len(result.qualitative_analyses) == 1
+    assert result.qualitative_analyses[0].source_label == "Earnings call (user-provided)"
+    assert result.qualitative_analyses[0].source_accession_number is None
+
+
+def test_analyze_raises_when_qualitative_requested_without_client(tmp_path):
+    with pytest.raises(QualitativeAnalysisError):
+        analyze(
+            ticker="TSTX",
+            market_price=50.0,
+            as_of_date=date(2026, 1, 1),
+            assumptions=_assumptions(),
+            client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+            ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+            analyze_10k=True,
+        )
+
+
+def test_analyze_warns_on_multiple_high_severity_risks(tmp_path):
+    high_risk = {"label": "X", "description": "Y", "status": "emerging", "severity": "high"}
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        analyze_10k=True,
+        anthropic_client=fake_anthropic_client(
+            risks=[high_risk, high_risk], summary="two severe risks"
+        ),
+    )
+
+    assert any("high-severity qualitative risk" in w for w in result.warnings)

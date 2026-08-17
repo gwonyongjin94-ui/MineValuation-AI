@@ -1,12 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.analysis import get_sec_client, get_ticker_map
+from app.api.analysis import get_anthropic_client, get_sec_client, get_ticker_map
 from app.main import app
 from tests.factories import (
     STANDARD_SUBMISSIONS,
     build_mock_sec_client,
     build_ticker_map_with_cache,
+    fake_anthropic_client,
     standard_company_facts,
 )
 
@@ -19,6 +20,9 @@ def client(tmp_path):
     app.dependency_overrides[get_ticker_map] = lambda: build_ticker_map_with_cache(
         tmp_path, {"TSTX": 999999}
     )
+    # Explicit None, not the real dependency - a real ANTHROPIC_API_KEY in the
+    # local .env must never let a "not llm"-marked test make a real paid call.
+    app.dependency_overrides[get_anthropic_client] = lambda: None
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -37,6 +41,7 @@ def test_analyze_endpoint_returns_valuation_with_default_assumptions(client):
     assert body["assumptions"]["discount_rate"] == 0.09
     assert len(body["financials"]) == 2
     assert len(body["sources"]) == 2
+    assert body["qualitative_analyses"] == []
 
 
 def test_analyze_endpoint_accepts_assumption_overrides(client):
@@ -87,3 +92,51 @@ def test_analyze_endpoint_rejects_non_positive_market_price(client):
     response = client.post("/api/v1/analyze", json={"ticker": "TSTX", "market_price": 0})
 
     assert response.status_code == 422
+
+
+def test_analyze_endpoint_returns_503_when_qualitative_requested_without_key(client):
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "TSTX", "market_price": 50.0, "analyze_10k": True},
+    )
+
+    assert response.status_code == 503
+
+
+def test_analyze_endpoint_returns_qualitative_analysis_when_configured(client):
+    app.dependency_overrides[get_anthropic_client] = lambda: fake_anthropic_client(
+        risks=[{"label": "X", "description": "Y", "status": "emerging", "severity": "medium"}],
+        summary="one notable risk",
+    )
+
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "TSTX", "market_price": 50.0, "analyze_10k": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["qualitative_analyses"]) == 1
+    assert body["qualitative_analyses"][0]["source_label"] == "10-K"
+    assert len(body["sources"]) == 3
+
+
+def test_analyze_endpoint_earnings_call_text_produces_analysis(client):
+    app.dependency_overrides[get_anthropic_client] = lambda: fake_anthropic_client(
+        risks=[], summary="nothing notable"
+    )
+
+    response = client.post(
+        "/api/v1/analyze",
+        json={
+            "ticker": "TSTX",
+            "market_price": 50.0,
+            "earnings_call_text": "management discussed guidance",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["qualitative_analyses"]) == 1
+    assert body["qualitative_analyses"][0]["source_label"] == "Earnings call (user-provided)"
+    assert body["qualitative_analyses"][0]["source_accession_number"] is None
