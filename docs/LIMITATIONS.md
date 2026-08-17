@@ -1,7 +1,7 @@
 # Limitations
 
-Honest accounting of what V1 does not do, so results are read as a
-starting point for analysis, not a verdict. Grouped by layer.
+Honest accounting of what this system does not do, so results are read
+as a starting point for analysis, not a verdict. Grouped by layer.
 
 ## Data layer
 
@@ -87,11 +87,41 @@ starting point for analysis, not a verdict. Grouped by layer.
   scenario to confirm point-in-time results match what a real investor
   would have seen.
 
+## Qualitative layer (V2)
+
+- **No section-level extraction from filings.** Checked live against
+  AAPL and MSFT's 10-Ks first: filer-generated HTML structure varies
+  too much between vendors to reliably isolate "just Risk Factors" or
+  "just MD&A" (see DATA_MODEL.md and DATA_SPIKE_NOTES.md's V2 section).
+  The whole cleaned document is handed to the LLM instead - it may
+  spend attention on sections (legal boilerplate, exhibits) that aren't
+  actually relevant.
+- **Earnings calls are not fetched automatically.** There's no free SEC
+  source for call transcripts; the caller pastes the text directly via
+  `earnings_call_text`. Nothing validates that the pasted text is
+  accurate, complete, or actually from the company/quarter claimed.
+- **No numeric "Adjusted Margin of Safety."** Qualitative risk and
+  quantitative MOS are reported side by side, never combined into one
+  score - see VALUATION_METHOD.md for why. A high-severity-risk warning
+  is a flag to look closer, not a discount applied to the number.
+- **LLM risk extraction quality is not independently benchmarked.**
+  Spiked once against a real AAPL 10-K with plausible, well-grounded
+  output (see `scripts/spike_qualitative_risk.py`), but there's no
+  systematic evaluation against a labeled set of filings, and no check
+  that the model isn't missing a material risk it should have flagged.
+- **FinBERT sentiment is sentence-level and context-free.** Each
+  sentence is classified independently - a sentence like "the Company
+  no longer faces material litigation risk" can score negative on
+  "litigation risk" wording despite being good news, since FinBERT
+  doesn't see surrounding sentences for context.
+- **Both qualitative features cost real resources per call**: the LLM
+  call costs money (a few cents per 10-K on Haiku - see
+  DATA_SPIKE_NOTES.md), and FinBERT sentiment adds tens of seconds of
+  CPU inference time per request. Neither runs unless explicitly
+  requested (`analyze_10k`/`earnings_call_text`/`include_sentiment`).
+
 ## Scope, generally
 
-- No qualitative analysis of any kind (10-K/10-Q text, earnings calls,
-  news) - this is explicitly a V2+ concern per the original project
-  plan, and no text-processing code exists yet.
 - No portfolio management, trade execution, or stock screening/
   recommendation.
 - No mobile or web UI - this is a JSON API only.

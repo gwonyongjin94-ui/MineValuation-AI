@@ -113,6 +113,31 @@ Fiscal years are discovered (not assumed) by unioning the annual
 tags - the two concepts virtually every 10-K filer reports under a
 standard tag.
 
+## V2: filing document text (`app/data/filing_documents.py`)
+
+Separate from `companyfacts` - this is the raw 10-K/10-Q document
+itself (inline-XBRL HTML), fetched from
+`https://www.sec.gov/Archives/edgar/data/{cik}/{accession}/{primaryDocument}`
+(the `primaryDocument` filename comes from `submissions.filings.recent`).
+
+**No section-level extraction** (e.g. "just Risk Factors"). Checked live
+against two real 10-Ks first: AAPL's filer template has a hyperlinked
+table of contents mapping each Item to an anchor id, so slicing between
+the Item 1A and Item 1B anchors cleanly isolates Risk Factors - but
+MSFT's filer template has no such links at all, and "Item 1A" appears
+21 times as plain repeated text with nothing to anchor a slice to.
+Filer-generated HTML structure varies too much between vendors to build
+a reliable parser without a much bigger investment (see
+DATA_SPIKE_NOTES.md's V2 section). `clean_filing_html()` strips
+script/style tags and the hidden inline-XBRL metadata block
+(`display:none`) and returns the whole document as plain text instead -
+the qualitative layer's job is deciding what part of that text matters,
+not this layer's.
+
+Cleaned text size for real filings: AAPL's latest 10-K is ~208k chars
+(~52k tokens); MSFT's is ~336k chars (~84k tokens) - both fit
+comfortably in an LLM context window without chunking.
+
 ## Known data-model limitations
 
 See [LIMITATIONS.md](LIMITATIONS.md) for the full list; the ones most

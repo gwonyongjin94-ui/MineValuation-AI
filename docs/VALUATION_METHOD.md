@@ -148,6 +148,36 @@ separate from "what SEC filings say" is what let this project isolate
 SEC-layer bugs from valuation-layer bugs during development, and there
 is no reason to lose that separation now.
 
+## 4. Qualitative risk and sentiment (V2) - never merged into MOS numerically
+
+`app/qualitative/risk_extraction.py` and `app/qualitative/sentiment.py`
+produce structured output from text (an auto-fetched 10-K, and/or a
+user-pasted earnings call transcript), but **there is no formula that
+converts a qualitative risk into dollars of intrinsic value or
+percentage points of margin of safety**, and this project deliberately
+does not invent one. Every other assumption in this system has some
+grounding - a stated growth/discount-rate input, a formula from
+Damodaran, a tag verified against real data. "N high-severity risks =
+X% off the margin of safety" would have none of that; it would be a
+made-up number wearing a formula's clothes, which is exactly what the
+rest of this document argues against (no auto-derived tax rate, no
+computed WACC, always a range instead of a point estimate).
+
+Instead, `analysis_service.analyze()` reports `margin_of_safety`
+(quantitative) and `qualitative_analyses`/`sentiment_analyses`
+side by side in the same response, and only adds a `warnings` entry
+when 2+ high-severity qualitative risks are found
+(`HIGH_SEVERITY_WARNING_THRESHOLD`) - a flag to look closer, not an
+adjustment to the number. Reading both together is the user's job, the
+same way a human analyst would treat a DCF output and a risk-factors
+read as two separate inputs to a judgment call, not two terms in one
+equation.
+
+FinBERT sentiment (`score_sentiment()`) is a faster, free, complementary
+signal to the LLM risk extraction, not a replacement for it - see
+DATA_MODEL.md and DATA_SPIKE_NOTES.md's V2 section for how the text is
+prepared and why FinBERT is self-hosted rather than a hosted API.
+
 ## Defaults at the API boundary
 
 `app/api/analysis.py` defines `DEFAULT_ASSUMPTIONS` (5% FCFF growth,

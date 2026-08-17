@@ -8,6 +8,7 @@ app/services/        orchestration - wires the layers below into one call
 app/data/            SEC access + raw-fact schema (FinancialFact, FinancialStatement)
 app/financials/      raw facts -> normalized statement -> pure analysis metrics
 app/valuation/        FCFF -> DCF -> margin of safety
+app/qualitative/      V2: LLM risk extraction + FinBERT sentiment, from raw text
 ```
 
 Each layer only knows about the layer directly below it, and none of
@@ -91,6 +92,8 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | `valuation/fcff.py` | FCFF per statement, base-FCFF selection | Discount anything |
 | `valuation/dcf.py` | Project, discount, terminal value, sensitivity | Know about market price |
 | `valuation/margin_of_safety.py` | market price + as_of_date -> MOS range | Fetch market data |
+| `qualitative/risk_extraction.py` | Text -> structured qualitative risks (forced tool-use) | Fetch text, know its source |
+| `qualitative/sentiment.py` | Text -> FinBERT sentence-level sentiment | Fetch text, know its source |
 | `services/analysis_service.py` | Call the above in order, assemble one result | Know about HTTP status codes |
 | `api/analysis.py` | Request/response models, error -> HTTP status | Compute anything |
 
@@ -109,3 +112,59 @@ that isn't `STANDARD`, and the API layer turns that into a normal
 `200` response with `margin_of_safety: null` and an explanatory
 `unsupported_reason` - not an error, since "this is a bank" is a valid
 and useful answer.
+
+## V2: qualitative layer
+
+```
+POST /api/v1/analyze { analyze_10k: true, earnings_call_text?: "...", include_sentiment?: true }
+  │
+  ├─ analyze_10k=true
+  │    │
+  │    ▼
+  │  list_recent_filings() + fetch_filing_document()   app/data/filing_documents.py
+  │    │  (raw 10-K/10-Q HTML -> cleaned plain text; no section-level
+  │    │   extraction - see DATA_MODEL.md for why)
+  │    ▼
+  │  extract_risks(text, "10-K")                       app/qualitative/risk_extraction.py
+  │  score_sentiment(text, "10-K")  [if include_sentiment] app/qualitative/sentiment.py
+  │
+  └─ earnings_call_text="..." (user-pasted, not fetched - no free SEC
+       source for earnings calls)
+       │
+       ▼
+     extract_risks(text, "Earnings call (user-provided)")
+     score_sentiment(...)  [if include_sentiment]
+```
+
+Both qualitative paths run independently of the quantitative DCF/MOS
+path and are never merged into it numerically - `analysis_service.analyze()`
+returns `qualitative_analyses` and `sentiment_analyses` as separate lists
+alongside `margin_of_safety`, and only adds a `warnings` entry when 2+
+high-severity risks are found. See VALUATION_METHOD.md for why there is
+no "Adjusted Margin of Safety" formula.
+
+`extract_risks()`/`score_sentiment()` take a client/classifier as an
+explicit parameter (`anthropic_client`, `sentiment_classifier`) rather
+than constructing one internally - the same dependency-injection pattern
+`SECClient`/`TickerMap` already use, and for the same reason: tests
+inject a fake instead of hitting a real (paid, or ~1GB-model-loading)
+backend. `app/api/analysis.py` wires the real ones via FastAPI
+`Depends()` (`get_anthropic_client`, `get_sentiment_classifier`).
+
+Both qualitative features are opt-in per request and gated on server
+configuration: `analyze_10k`/`earnings_call_text` need `ANTHROPIC_API_KEY`
+set, `include_sentiment` needs the optional `[sentiment]` extra
+(`transformers`/`torch`) installed. Requesting either without the
+prerequisite returns `503`, not a crash or silent no-op.
+
+## Configuration
+
+`app/config.py`'s `Settings` reads `.env` from a path anchored to the
+project root (`Path(__file__).resolve().parent.parent`), not a bare
+relative `".env"` resolved against the process's current working
+directory. That distinction is not theoretical: launching uvicorn with
+`--app-dir` from outside the project directory (as this project's own
+`.claude/launch.json` does, to work with the run/preview tooling)
+reproduced a `500` on every request until this was fixed - pydantic-settings
+resolves a relative `env_file` against cwd, and cwd was never guaranteed
+to be the project root.
