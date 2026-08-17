@@ -1,0 +1,107 @@
+# Phase 1.5 Data Spike Notes
+
+`scripts/spike_companyfacts.py`로 GOOGL / MSFT / AAPL / JPM / HBB(10-K/A 사례)의 실제
+`companyfacts`를 관찰한 결과. Phase 2 스키마 설계의 입력 자료다.
+
+## 1. Revenue 태그 마이그레이션은 2018년 ASC 606 한 번으로 끝난 일이 아니다
+
+MSFT, AAPL 모두 다음 순서로 태그가 바뀐 이력이 있다:
+
+```
+SalesRevenueNet (~2018 이전)
+    → Revenues (2018 전환기, 1개 연도)
+    → RevenueFromContractWithCustomerExcludingAssessedTax (ASC 606 정착 후)
+```
+
+그런데 **GOOGL은 FY2025 10-K(2026-02-05 제출, accn 0001652044-26-000018)에서
+다시 `RevenueFromContractWithCustomerExcludingAssessedTax` → `Revenues`로 되돌아갔다.**
+즉 태그 변경은 "2018년 한 번의 일회성 이벤트"가 아니라 기업이 임의 시점에 또 바꿀 수 있는
+현재진행형 리스크다. fallback chain은 계속 유지보수해야 하는 대상으로 설계해야 한다.
+
+## 2. 같은 filing(accn) 안에서는 태그를 하나만 쓴다
+
+관찰된 3개 정상기업(GOOGL/MSFT/AAPL) 전부, 한 번의 10-K(하나의 accn) 안에서는 비교연도
+전체(보통 2~3개 연도)를 **동일한 태그 하나**로 일관되게 보고한다. 태그가 필요 시
+바뀌는 시점은 "새 10-K accn"의 경계뿐이었다.
+
+→ 설계 반영: fallback chain은 **filing(accn) 단위로 태그 하나를 확정**한 뒤 그 안의
+모든 기간을 그 태그로 읽어야 한다. "필요한 연도마다 다른 태그를 섞어 찾는" 방식은
+관찰된 패턴과 맞지 않는다.
+
+## 3. 같은 경제적 기간이 여러 accn/fy에 재등장하고, 값이 실제로 바뀔 수 있다
+
+10-K는 보통 최근 2~3개 연도를 비교표시하므로, 예를 들어 AAPL FY2024 매출은:
+- fy=2024 (2024-11-01 제출 10-K, 당해년도로)
+- fy=2025 (2025-10-31 제출 10-K, 전년도 비교값으로) 로 **두 번** 나타난다.
+
+AAPL의 경우 두 값이 동일했지만, **HBB는 실제로 값이 달랐다:**
+
+| 시점 | form | filed | FY2019 매출 |
+|---|---|---|---|
+| 원본 | 10-K | 2020-02-26 | $612,843,000 |
+| 정정 | 10-K/A | 2020-07-24 | $611,786,000 |
+
+→ "필요한 fy의 값"을 고를 때 단순히 최신 accn을 집는 것과 "원래 보고된 그대로"를 집는 것은
+다른 선택이다. `accn` + `filed`를 반드시 스키마에 남기고, **"as reported"(최초 filed 기준)와
+"as restated"(최신 filed 기준)를 구분해서 노출**해야 한다 — 이게 이전에 합의한
+`filed_date ≤ as_of_date` 원칙이 실제로 필요해지는 지점이다.
+
+## 4. 10-K/A는 연간 수치만 고치지 않는다 (열린 이슈)
+
+HBB의 10-K/A(accn 0001709164-20-000032)는 연간 수치뿐 아니라 직전 여러 분기의
+"Selected Quarterly Financial Data"까지 정정해서 같은 태그 아래 분기 단위 fact를
+대량으로 함께 실었다. 초기 관찰 스크립트가 `fp` 필터 없이 이 필터링을 했더니
+같은 `end` 날짜에 값이 다른 항목이 여러 개 나와서 "중복 키"처럼 보였는데, 실제로는
+연간(FY)과 분기(Q1~Q4) 항목이 섞여 있었을 뿐이었다(`start`가 다름).
+
+→ 교훈: `(tag, unit, end, fy, form)`만으로 fact를 선택하면 안 되고, 반드시
+**`fp == "FY"` 그리고 `start`~`end` 기간이 ~365일인지**까지 같이 확인해야 한다.
+AAPL 케이스(`revenue_tag_history`, fp 필터 적용)는 깨끗했던 반면 HBB 케이스는
+필터를 안 걸었더니 바로 지저분해졌다 — Phase 2 정규화 로직에서 이 필터를 생략하면
+안 된다는 게 직접 재현됐다.
+
+## 5. capex/D&A는 revenue 못지않게 태그가 갈린다
+
+관찰된 후보 태그 전부 실사용 중이었다:
+- D&A: `DepreciationDepletionAndAmortization`, `DepreciationAmortizationAndAccretionNet`,
+  `DepreciationAndAmortization`, `Depreciation` — AAPL은 이 넷 중 세 개를 연도별로 다르게 씀
+- CapEx: `PaymentsToAcquirePropertyPlantAndEquipment`, `PaymentsToAcquireProductiveAssets`
+
+→ revenue와 동일한 fallback chain 설계를 그대로 적용하면 된다. 별도 로직 불필요.
+
+## 6. JPM(은행)은 이론이 아니라 데이터로 FCFF 부적합이 확인됨
+
+JPM `companyfacts`에서 우리 관심 concept 중:
+- `OperatingIncomeLoss`: **없음**
+- `AssetsCurrent` / `LiabilitiesCurrent`: **없음** (은행은 대차대조표를 유동/비유동으로 분류하지 않음)
+- capex 태그 후보 3개: **전부 없음**
+- `Revenues`(총괄 tag)와 `NetIncomeLoss`는 존재
+- `NetCashProvidedByUsedInOperatingActivities`는 존재하지만 **-$42B, -$147B로 대규모 음수**
+  (예금/트레이딩 흐름이 지배적이라 일반기업의 "영업활동현금흐름"과 의미가 다름)
+
+→ `financial_company` 판정을 SIC 코드(`sicDescription: "National Commercial Banks"`)로
+게이트하는 설계가 이론적 우려가 아니라 실제 정규화 단계에서 막힐 수밖에 없다는 게 확인됐다.
+Phase 2에서 SIC 기반 `valuation_category` 분류를 정규화보다 먼저 태워야 한다
+(정규화 시도 후 실패하는 게 아니라, 애초에 정규화 대상 concept 자체가 없다).
+
+## 7. NWC 관련 태그는 표준기업에서는 안정적으로 존재
+
+GOOGL/MSFT/AAPL/HBB 전부 `AssetsCurrent`, `LiabilitiesCurrent`,
+`CashAndCashEquivalentsAtCarryingValue`가 존재. 다만 short-term debt 태그는
+`ShortTermBorrowings` / `DebtCurrent` / `LongTermDebtCurrent`로 기업마다 다르다 —
+이전에 합의한 "operating NWC = (유동자산-현금) - (유동부채-단기부채)" 계산을 위해
+이 셋도 fallback chain에 포함해야 한다.
+
+## 8. Provenance 필드는 전부 raw JSON에 이미 존재
+
+`accn`, `fy`, `fp`, `form`, `filed`, `start`, `end`가 각 fact entry에 기본으로 포함되어
+있음을 5개 기업 전부에서 확인. 스키마에 담는 데 추가 비용 없음.
+
+## Phase 2로 넘기는 결정 사항
+
+1. Fallback chain은 **filing(accn) 단위**로 태그를 확정한다.
+2. Fact 선택은 `fp == "FY"` + `start~end ≈ 365일` 두 조건을 모두 건다.
+3. 같은 기간이 여러 번 나오면 **"as reported"(가장 이른 filed)** 를 기본으로 쓰고,
+   이후 restated 버전이 있으면 별도로 노출한다(자동으로 최신값에 덮어쓰지 않는다).
+4. `valuation_category` 분류(SIC 기반)는 정규화 파이프라인의 맨 앞단에서 실행한다.
+5. D&A/CapEx/short-term debt 모두 revenue와 동일한 fallback chain 패턴을 쓴다.
