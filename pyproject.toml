@@ -20,6 +20,11 @@ dev = [
 [tool.ruff]
 line-length = 100
 
+[tool.ruff.lint]
+# B008: FastAPI's Depends()-as-default-argument is the documented DI
+# pattern, not the mutable-default-argument bug this rule targets.
+ignore = ["B008"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

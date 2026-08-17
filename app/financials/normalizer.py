@@ -101,13 +101,13 @@ def classify_company(sic: str | None) -> ValuationCategory:
 
 
 def normalize(company_facts: dict, submissions: dict) -> list[FinancialStatement]:
-    company = _build_company_info(company_facts, submissions)
+    company = build_company_info(company_facts, submissions)
     facts_ns = company_facts.get("facts", {})
     period_ends = _discover_period_ends(facts_ns)
     return [_build_statement(company, facts_ns, period_end) for period_end in sorted(period_ends)]
 
 
-def _build_company_info(company_facts: dict, submissions: dict) -> CompanyInfo:
+def build_company_info(company_facts: dict, submissions: dict) -> CompanyInfo:
     tickers = submissions.get("tickers") or [""]
     sic = submissions.get("sic")
     return CompanyInfo(
