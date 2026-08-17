@@ -1,0 +1,159 @@
+# Valuation Method
+
+FCFF-based DCF, per Damodaran. This describes exactly what
+`app/valuation/{assumptions,fcff,dcf,margin_of_safety}.py` implement -
+not a general DCF tutorial.
+
+## 1. FCFF (`app/valuation/fcff.py`)
+
+```
+FCFF = EBIT * (1 - tax_rate) + D&A - CapEx - change in non-cash NWC
+```
+
+This is **not** the same number as `metrics.YearMetrics.simple_fcf`
+(`operating_cash_flow - capex`), which is a quick liquidity-style
+figure computed in `app/financials/metrics.py` and never fed into the
+DCF. Conflating the two was flagged early in this project's design
+review as the most likely source of a silent, hard-to-catch bug, so
+the two live in different modules with different names on purpose.
+
+- **EBIT** is approximated by GAAP `operating_income`. A documented
+  simplification: EBIT can differ from operating income when a company
+  reports non-operating items inside it, and there is no separate EBIT
+  tag normalized in the schema.
+- **tax_rate** is a required, direct input to `ValuationAssumptions` -
+  not derived as an "effective" or "marginal" rate. Deriving either
+  would need `income_tax_expense` and `pretax_income`, neither of
+  which is normalized (see LIMITATIONS.md). Pass the rate you actually
+  want to assume (e.g. the 21% US statutory rate, or your own read of
+  the company's effective rate from its 10-K).
+- **Change in non-cash NWC** follows Damodaran's definition, not a
+  naive `current_assets - current_liabilities`:
+
+  ```
+  non-cash NWC = (current_assets - cash) - (current_liabilities - short_term_debt)
+  change in NWC(year t) = NWC(t) - NWC(t-1)
+  ```
+
+  Cash and short-term debt are financing items, not operating working
+  capital. Skipping this adjustment would badly distort FCFF for
+  cash-rich companies (AAPL, GOOGL) where cash is a large share of
+  current assets. If `short_term_debt` has no matching tag for a
+  period, it's treated as `0` with an explicit warning (not a silent
+  default) - unlike a missing `current_assets`/`current_liabilities`/
+  `cash`, which makes that year's NWC (and therefore FCFF)
+  uncomputable.
+
+- FCFF for the first available fiscal year is always `None` - there is
+  no prior year to compute a change in NWC against.
+
+### Base FCFF
+
+`ValuationAssumptions.base_fcf_method` chooses how the forecast's
+starting point is picked from the FCFF history:
+
+- `latest_year` - most recent computable FCFF
+- `3yr_avg` / `5yr_avg` - average of the most recent N computable
+  years (fewer years than N available -> proceeds with what exists,
+  plus a warning)
+
+Averaging multiple years, not just the latest one, is the default
+(`3yr_avg`) because a single year can be distorted by one-off items -
+consistent with the project's value-investing framing, which favors
+normalized figures over a single snapshot.
+
+## 2. DCF (`app/valuation/dcf.py`)
+
+```
+projected FCFF(t) = base_fcff * (1 + fcff_growth_rate)^t,  t = 1..forecast_years
+discounted FCFF(t) = projected FCFF(t) / (1 + discount_rate)^t
+
+terminal value = FCFF(forecast_years) * (1 + terminal_growth_rate)
+                 / (discount_rate - terminal_growth_rate)
+discounted terminal value = terminal value / (1 + discount_rate)^forecast_years
+
+enterprise value = sum(discounted FCFF) + discounted terminal value
+
+equity value = enterprise value + cash - (short_term_debt + long_term_debt)
+value per share = equity value / shares_outstanding
+```
+
+`ValuationAssumptions` requires `fcff_growth_rate`, `discount_rate`,
+`terminal_growth_rate`, and `tax_rate` explicitly - none of these
+numbers exist anywhere inside the calculation code itself.
+`terminal_growth_rate >= discount_rate` is rejected at construction
+time (the terminal value formula is undefined/negative otherwise).
+
+If `cash` or `shares_outstanding` is missing on the statement being
+valued, the equity-value bridge or per-share step is skipped with an
+explicit warning rather than silently treating the missing value as
+zero.
+
+**No discount rate (WACC) calculator.** `discount_rate` is a required
+user input, not computed from a cost-of-equity/cost-of-debt model -
+that would need market data (beta, cost of debt) V1 deliberately
+doesn't fetch. See LIMITATIONS.md.
+
+### Terminal value dominance warning
+
+If the discounted terminal value exceeds 75% of enterprise value, the
+result carries a warning: a short forecast horizon relative to the
+terminal assumption means most of the valuation rests on an assumption
+about the distant future, not near-term projected cash flow - a
+classic DCF critique from the value-investing tradition this project
+is built around, not just an implementation detail.
+
+### Sensitivity - never a single number
+
+`run_dcf_valuation()` always returns a 3x3 grid
+(`DCFResult.sensitivity`) of `value_per_share` across
+`discount_rate ± {0, 1pp}` and `terminal_growth_rate ± {0, 1pp}`
+around the base assumptions. Combinations where the varied terminal
+growth rate would be >= the varied discount rate are marked invalid
+(`value_per_share: null`) rather than silently skipped or crashing.
+
+A single point estimate implies more precision than a DCF actually
+has; margin-of-safety reasoning needs a range to reason about, not a
+falsely precise number.
+
+## 3. Margin of Safety (`app/valuation/margin_of_safety.py`)
+
+```
+MOS = (intrinsic_value - market_price) / intrinsic_value
+```
+
+`compute_margin_of_safety(statements, assumptions, market_price,
+as_of_date)`:
+
+1. **Filters look-ahead bias first.** Any `FinancialStatement` whose
+   facts were filed after `as_of_date` is excluded before the DCF
+   runs, enforcing `filed_date <= as_of_date`. A valuation "as of" a
+   date must never use data that wasn't public yet on that date - see
+   DATA_SPIKE_NOTES.md finding #3, where a real 10-K/A changed a
+   reported figure after the fact. V1 doesn't backtest, but this check
+   is free to keep in place now and expensive to retrofit later.
+2. Runs the DCF on the remaining (eligible) statements.
+3. Computes MOS for the base case, plus `margin_of_safety_low/high`
+   read directly off the DCF's own sensitivity grid (min/max
+   `value_per_share`) - not a separately invented range. MOS is
+   monotonic in intrinsic value for intrinsic value > 0, so this
+   pairing is always consistent.
+
+A non-positive intrinsic value produces `margin_of_safety: null`
+rather than a nonsensical or divide-by-zero result.
+
+**Market price is a request input, not fetched.** V1 deliberately does
+not integrate a market-data provider - keeping "what the market says"
+separate from "what SEC filings say" is what let this project isolate
+SEC-layer bugs from valuation-layer bugs during development, and there
+is no reason to lose that separation now.
+
+## Defaults at the API boundary
+
+`app/api/analysis.py` defines `DEFAULT_ASSUMPTIONS` (5% FCFF growth,
+9% discount rate, 2.5% terminal growth, 21% tax rate, 5-year forecast,
+3-year average base FCFF) used when a request doesn't specify
+assumptions. This is a documented, overridable constant at the HTTP
+boundary, not a number inside the valuation math - and the response
+always echoes back whichever assumptions actually produced it, per the
+project's "never just return a number" requirement.
