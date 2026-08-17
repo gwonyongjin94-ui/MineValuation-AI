@@ -5,6 +5,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     sec_user_agent: str
+    # Optional so SEC-only functionality (and CI, until the secret is
+    # configured there) doesn't break when no qualitative-analysis
+    # feature actually needs it yet - checked at the point of use instead.
+    anthropic_api_key: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
