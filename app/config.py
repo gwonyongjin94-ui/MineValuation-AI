@@ -1,6 +1,14 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Anchored to the project root, not left as the relative ".env" pydantic-
+# settings resolves against the process's current working directory -
+# that broke as soon as the app was launched with a different cwd (e.g.
+# `uvicorn app.main:app --app-dir /path/to/project` from elsewhere), which
+# is exactly how it's run under a process manager or container in practice.
+_ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
 
 
 class Settings(BaseSettings):
@@ -10,7 +18,7 @@ class Settings(BaseSettings):
     # feature actually needs it yet - checked at the point of use instead.
     anthropic_api_key: str | None = None
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
 
 
 @lru_cache
