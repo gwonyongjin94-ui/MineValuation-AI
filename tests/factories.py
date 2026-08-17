@@ -199,3 +199,12 @@ def fake_anthropic_client(risks: list | None = None, summary: str = "", no_tool_
             return response
 
     return SimpleNamespace(messages=FakeMessages())
+
+
+def fake_sentiment_classifier(labels_and_scores: list):
+    """A stand-in for the transformers pipeline object score_sentiment() calls."""
+
+    def classify(sentences, **kwargs):
+        return [{"label": label, "score": score} for label, score in labels_and_scores]
+
+    return classify

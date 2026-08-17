@@ -139,3 +139,33 @@ LLM에 넘긴다.** 섹션을 찾는 부담을 파서가 아니라 LLM의 독해
 | MSFT | 8.5MB | 336,285자 | ~84,000 |
 
 두 경우 다 Claude 컨텍스트 윈도우 안에 여유 있게 들어간다.
+
+## V2 — FinBERT 스파이크
+
+FinBERT(`ProsusAI/finbert`)는 BERT 계열이라 컨텍스트가 ~512 토큰밖에 안 돼서
+10-K 전체를 그냥 넣을 수 없다. 문장 단위로 쪼개서 돌려야 한다.
+
+**문장 분리**: 금융 문서는 "U.S.", "Mr.", "Dept." 같은 약어가 많아서 단순
+정규식(". "로 split)은 문장을 잘못 자른다. `pysbd`(규칙 기반, 모델 다운로드
+없음)로 바꾸니 약어를 정확히 처리했다.
+
+**실제 AAPL 10-K로 전체 파이프라인 실행**:
+- 문장 분리: 990개 중 4단어 미만(페이지 번호, 표 파편 등 노이즈) 제외하고 925개
+- 분리 시간: ~12초, FinBERT 분류 시간: ~11초(CPU, batch_size=16, 모델 로드 이후)
+- 분포: neutral 640 / negative 216 / positive 69 — Risk Factors 위주 문서라 부정/중립에 치우침
+- 가장 부정적인 문장 상위권: 세그먼트별 매출 감소, 관세로 인한 매출총이익률 하락,
+  재고 평가손실 관련 문구 등 — 실제로 의미 있는 신호였음(일부는 페이지 헤더가
+  섞여 들어간 노이즈도 있었음)
+
+**결정**: 자체 호스팅(`transformers`+`torch`, `ProsusAI/finbert`)으로 간다.
+호스팅 추론 API 대신 자체 호스팅을 택한 이유는 이미 Anthropic API 키 하나를
+추가로 받은 상황에서 또 다른 외부 서비스 계정(HuggingFace 등)을 늘리고 싶지
+않았고, FinBERT가 원래 "LLM 앞단의 빠른 무료 1차 필터" 역할이라 호출당 과금이
+없는 쪽이 그 취지에 맞기 때문이다.
+
+**의존성 분리**: `torch`+`transformers`는 무거워서(~1GB) 기본 설치에는 안 넣고
+`pip install -e ".[sentiment]"` optional extra로 뺐다. CI는 이 extra 없이
+도는데, `app/qualitative/sentiment.py`가 `transformers` import를
+`_get_classifier()` 함수 안에서 지연 로딩하기 때문에 모듈 자체는 문제없이
+import된다 — 실제로 별도 venv에 extra 없이 설치해서 앱 임포트와 테스트 스위트가
+정상 도는지 직접 확인했다.

@@ -1,6 +1,7 @@
 """Wires SEC client -> normalizer -> metrics -> DCF -> margin of safety,
 plus optional qualitative risk extraction (10-K text and/or a
-user-pasted earnings call transcript).
+user-pasted earnings call transcript) and optional FinBERT sentiment
+scoring of that same text.
 
 Transport-agnostic on purpose: it raises the data-layer (SECClientError,
 UnknownTickerError), valuation-layer (UnsupportedValuationError), and
@@ -26,6 +27,7 @@ from app.qualitative.risk_extraction import (
     RiskSeverity,
     extract_risks,
 )
+from app.qualitative.sentiment import SentimentSummary, score_sentiment
 from app.valuation.assumptions import ValuationAssumptions
 from app.valuation.dcf import UnsupportedValuationError
 from app.valuation.margin_of_safety import MarginOfSafetyResult, compute_margin_of_safety
@@ -47,6 +49,7 @@ class AnalysisResult(BaseModel):
     margin_of_safety: MarginOfSafetyResult | None
     unsupported_reason: str | None
     qualitative_analyses: list[QualitativeRiskAnalysis]
+    sentiment_analyses: list[SentimentSummary]
     sources: list[str]
     warnings: list[str]
 
@@ -61,6 +64,8 @@ def analyze(
     analyze_10k: bool = False,
     earnings_call_text: str | None = None,
     anthropic_client=None,
+    include_sentiment: bool = False,
+    sentiment_classifier=None,
 ) -> AnalysisResult:
     if (analyze_10k or earnings_call_text) and anthropic_client is None:
         raise QualitativeAnalysisError(
@@ -96,6 +101,7 @@ def analyze(
     ]
 
     qualitative_analyses: list[QualitativeRiskAnalysis] = []
+    sentiment_analyses: list[SentimentSummary] = []
     if analyze_10k:
         filings = [f for f in list_recent_filings(submissions) if f.form == "10-K"]
         if filings:
@@ -108,12 +114,24 @@ def analyze(
                     source_accession_number=document.accession_number,
                 )
             )
+            if include_sentiment:
+                sentiment_analyses.append(
+                    score_sentiment(document.text, "10-K", classifier=sentiment_classifier)
+                )
             sources.append(document.document_url)
 
     if earnings_call_text:
         qualitative_analyses.append(
             extract_risks(anthropic_client, earnings_call_text, "Earnings call (user-provided)")
         )
+        if include_sentiment:
+            sentiment_analyses.append(
+                score_sentiment(
+                    earnings_call_text,
+                    "Earnings call (user-provided)",
+                    classifier=sentiment_classifier,
+                )
+            )
 
     high_severity_count = sum(
         1
@@ -135,6 +153,7 @@ def analyze(
         margin_of_safety=margin_of_safety,
         unsupported_reason=unsupported_reason,
         qualitative_analyses=qualitative_analyses,
+        sentiment_analyses=sentiment_analyses,
         sources=sources,
         warnings=warnings,
     )

@@ -11,12 +11,20 @@ dependencies = [
     "httpx>=0.27",
     "beautifulsoup4>=4.12",
     "anthropic>=0.40",
+    "pysbd>=0.3",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
     "ruff>=0.6",
+]
+# Heavy (~1GB incl. model weights) and only needed for local FinBERT
+# sentiment scoring - kept out of the base install and out of CI.
+# pip install -e ".[dev,sentiment]" to use/test it locally.
+sentiment = [
+    "transformers>=4.40",
+    "torch>=2.0",
 ]
 
 [tool.ruff]
@@ -32,6 +40,7 @@ testpaths = ["tests"]
 markers = [
     "integration: hits the real SEC EDGAR API (network required)",
     "llm: hits the real Anthropic API (network required, costs real money - excluded from CI)",
+    "model: loads a local ML model requiring the optional [sentiment] extra - excluded from CI",
 ]
 
 [build-system]

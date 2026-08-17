@@ -1,13 +1,19 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.analysis import get_anthropic_client, get_sec_client, get_ticker_map
+from app.api.analysis import (
+    get_anthropic_client,
+    get_sec_client,
+    get_sentiment_classifier,
+    get_ticker_map,
+)
 from app.main import app
 from tests.factories import (
     STANDARD_SUBMISSIONS,
     build_mock_sec_client,
     build_ticker_map_with_cache,
     fake_anthropic_client,
+    fake_sentiment_classifier,
     standard_company_facts,
 )
 
@@ -140,3 +146,49 @@ def test_analyze_endpoint_earnings_call_text_produces_analysis(client):
     assert len(body["qualitative_analyses"]) == 1
     assert body["qualitative_analyses"][0]["source_label"] == "Earnings call (user-provided)"
     assert body["qualitative_analyses"][0]["source_accession_number"] is None
+
+
+def test_analyze_endpoint_returns_503_when_sentiment_unavailable(client, monkeypatch):
+    monkeypatch.setattr("app.api.analysis.sentiment_is_available", lambda: False)
+
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "TSTX", "market_price": 50.0, "include_sentiment": True},
+    )
+
+    assert response.status_code == 503
+
+
+def test_analyze_endpoint_returns_sentiment_when_requested(client, monkeypatch):
+    document_html = (
+        "<html><body>"
+        "<p>Competition has intensified across all our major product categories.</p>"
+        "<p>Services revenue grew strongly across every geographic segment this year.</p>"
+        "</body></html>"
+    )
+    app.dependency_overrides[get_sec_client] = lambda: build_mock_sec_client(
+        STANDARD_SUBMISSIONS, standard_company_facts(), document_html=document_html
+    )
+    app.dependency_overrides[get_anthropic_client] = lambda: fake_anthropic_client(
+        risks=[], summary="fine"
+    )
+    app.dependency_overrides[get_sentiment_classifier] = lambda: fake_sentiment_classifier(
+        [("negative", 0.9), ("positive", 0.8)]
+    )
+    monkeypatch.setattr("app.api.analysis.sentiment_is_available", lambda: True)
+
+    response = client.post(
+        "/api/v1/analyze",
+        json={
+            "ticker": "TSTX",
+            "market_price": 50.0,
+            "analyze_10k": True,
+            "include_sentiment": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["sentiment_analyses"]) == 1
+    assert body["sentiment_analyses"][0]["source_label"] == "10-K"
+    assert body["sentiment_analyses"][0]["sentence_count"] == 2

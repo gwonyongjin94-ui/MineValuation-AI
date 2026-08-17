@@ -12,6 +12,8 @@ from app.data.sec_client import SECClient, build_default_client
 from app.data.ticker_map import TickerMap, build_default_ticker_map
 from app.financials.metrics import YearMetrics
 from app.qualitative.risk_extraction import QualitativeAnalysisError, QualitativeRiskAnalysis
+from app.qualitative.sentiment import SentimentSummary
+from app.qualitative.sentiment import is_available as sentiment_is_available
 from app.services.analysis_service import analyze
 from app.valuation.assumptions import BaseFCFMethod, ValuationAssumptions
 from app.valuation.margin_of_safety import MarginOfSafetyResult
@@ -52,6 +54,13 @@ def get_anthropic_client() -> anthropic.Anthropic | None:
     return anthropic.Anthropic(api_key=api_key) if api_key else None
 
 
+def get_sentiment_classifier():
+    # None -> score_sentiment() lazily loads the real FinBERT pipeline.
+    # Exists as a dependency (rather than passing None inline) so tests
+    # can override it with a fake classifier without importing transformers.
+    return None
+
+
 class AssumptionsRequest(BaseModel):
     fcff_growth_rate: float | None = None
     discount_rate: float | None = None
@@ -73,6 +82,11 @@ class AnalyzeRequest(BaseModel):
     # V2 section for why this was chosen over a paid third-party API).
     analyze_10k: bool = False
     earnings_call_text: str | None = None
+    # Free and local (no per-call cost, unlike the LLM), but needs the
+    # optional [sentiment] extra (transformers/torch, ~1GB) installed on
+    # the server - opt-in rather than automatic so a server without it
+    # doesn't silently fail whenever analyze_10k/earnings_call_text is used.
+    include_sentiment: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -82,6 +96,7 @@ class AnalyzeResponse(BaseModel):
     margin_of_safety: MarginOfSafetyResult | None
     unsupported_reason: str | None
     qualitative_analyses: list[QualitativeRiskAnalysis]
+    sentiment_analyses: list[SentimentSummary]
     assumptions: ValuationAssumptions
     sources: list[str]
     warnings: list[str]
@@ -103,6 +118,7 @@ def analyze_ticker(
     client: SECClient = Depends(get_sec_client),
     ticker_map: TickerMap = Depends(get_ticker_map),
     anthropic_client: anthropic.Anthropic | None = Depends(get_anthropic_client),
+    sentiment_classifier=Depends(get_sentiment_classifier),
 ) -> AnalyzeResponse:
     assumptions = _resolve_assumptions(request.assumptions)
     as_of_date = request.as_of_date or date.today()  # noqa: DTZ011 - calendar date default is fine
@@ -112,6 +128,12 @@ def analyze_ticker(
             status_code=503,
             detail="analyze_10k/earnings_call_text requested but ANTHROPIC_API_KEY is not "
             "configured on this server",
+        )
+    if request.include_sentiment and not sentiment_is_available():
+        raise HTTPException(
+            status_code=503,
+            detail="include_sentiment requested but the [sentiment] extra "
+            "(transformers/torch) is not installed on this server",
         )
 
     try:
@@ -125,6 +147,8 @@ def analyze_ticker(
             analyze_10k=request.analyze_10k,
             earnings_call_text=request.earnings_call_text,
             anthropic_client=anthropic_client,
+            include_sentiment=request.include_sentiment,
+            sentiment_classifier=sentiment_classifier,
         )
     except SECClientError as exc:
         status_code = _ERROR_STATUS.get(type(exc), _DEFAULT_SEC_ERROR_STATUS)
@@ -140,6 +164,7 @@ def analyze_ticker(
         margin_of_safety=result.margin_of_safety,
         unsupported_reason=result.unsupported_reason,
         qualitative_analyses=result.qualitative_analyses,
+        sentiment_analyses=result.sentiment_analyses,
         assumptions=assumptions,
         sources=result.sources,
         warnings=result.warnings,

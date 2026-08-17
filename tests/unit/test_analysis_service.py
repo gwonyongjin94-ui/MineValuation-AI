@@ -13,6 +13,7 @@ from tests.factories import (
     build_mock_sec_client,
     build_ticker_map_with_cache,
     fake_anthropic_client,
+    fake_sentiment_classifier,
     standard_company_facts,
 )
 
@@ -143,3 +144,47 @@ def test_analyze_warns_on_multiple_high_severity_risks(tmp_path):
     )
 
     assert any("high-severity qualitative risk" in w for w in result.warnings)
+
+
+def test_analyze_10k_include_sentiment_adds_summary(tmp_path):
+    document_html = (
+        "<html><body>"
+        "<p>Competition has intensified across all our major product categories.</p>"
+        "<p>Services revenue grew strongly across every geographic segment this year.</p>"
+        "</body></html>"
+    )
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(
+            STANDARD_SUBMISSIONS, standard_company_facts(), document_html=document_html
+        ),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        analyze_10k=True,
+        anthropic_client=fake_anthropic_client(risks=[], summary="fine"),
+        include_sentiment=True,
+        sentiment_classifier=fake_sentiment_classifier(
+            [("negative", 0.9), ("positive", 0.8)]
+        ),
+    )
+
+    assert len(result.sentiment_analyses) == 1
+    assert result.sentiment_analyses[0].source_label == "10-K"
+    assert result.sentiment_analyses[0].sentence_count == 2
+
+
+def test_analyze_without_include_sentiment_leaves_it_empty(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        analyze_10k=True,
+        anthropic_client=fake_anthropic_client(risks=[], summary="fine"),
+    )
+
+    assert result.sentiment_analyses == []
