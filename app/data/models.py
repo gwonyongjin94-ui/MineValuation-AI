@@ -65,6 +65,7 @@ class FinancialStatement(BaseModel):
     current_liabilities: FinancialFact | None = None
     cash: FinancialFact | None = None
     short_term_debt: FinancialFact | None = None
+    long_term_debt: FinancialFact | None = None
     shares_outstanding: FinancialFact | None = None
     stockholders_equity: FinancialFact | None = None
 

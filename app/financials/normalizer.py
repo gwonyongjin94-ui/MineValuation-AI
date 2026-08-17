@@ -61,6 +61,12 @@ CONCEPT_CANDIDATES: dict[str, tuple[str, list[str]]] = {
         ],
     ),
     "short_term_debt": ("us-gaap", ["ShortTermBorrowings", "DebtCurrent", "LongTermDebtCurrent"]),
+    # LongTermDebtNoncurrent only - NOT a fallback list with "LongTermDebt".
+    # Checked live: AAPL/GOOGL/MSFT report both tags in the same filing with
+    # different values (LongTermDebt appears to include items beyond the
+    # noncurrent balance-sheet line), so treating them as interchangeable
+    # fallbacks would silently corrupt the figure.
+    "long_term_debt": ("us-gaap", ["LongTermDebtNoncurrent"]),
     "stockholders_equity": ("us-gaap", ["StockholdersEquity"]),
     # dei:EntityCommonStockSharesOutstanding reports an "as of" cover-page
     # date near the filing date, not the fiscal year end, so it can't be
