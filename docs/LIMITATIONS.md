@@ -27,17 +27,44 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   was confirmed to report a *different number* in the same filing for
   AAPL/GOOGL/MSFT. Some companies may simply lack a matching tag as a
   result.
+- **Whether `depreciation_amortization` and `cash`'s fallback
+  candidates measure the same thing is not fully verified**, unlike
+  `short_term_debt` (fixed - see below) and `long_term_debt`/
+  `shares_outstanding` (confirmed single-tag). AAPL reports
+  `DepreciationDepletionAndAmortization` vs `Depreciation`, and
+  `CashAndCashEquivalentsAtCarryingValue` vs `...RestrictedCash...`,
+  simultaneously with different values in the same filing. The current
+  priority order's choice is plausible (broader cash-flow-statement
+  figure for D&A, narrower unrestricted-cash figure for cash) but
+  hasn't been checked against what `AssetsCurrent` itself includes -
+  see DATA_MODEL.md.
 
 ## Normalization layer
 
-- **"As reported" always wins over restated values** for the metric
-  actually used in valuation - `restated_facts` are surfaced but never
-  substituted automatically. If a company's restated figures are more
-  accurate for your purposes, you'd need to read `restated_facts`
-  directly.
+- **As-of-date resolution picks the latest fact known by that date**
+  (as-reported or a later restatement, whichever was filed later but
+  still `<= as_of_date`) - implemented in
+  `margin_of_safety._resolve_fact_as_of()`, not in the normalizer
+  itself. The normalizer's `FinancialStatement.revenue` etc. always
+  hold the as-reported value; `restated_facts` holds the rest. Reading
+  a `FinancialStatement` directly (bypassing `compute_margin_of_safety`)
+  gets the as-reported figure only.
+- **Not every value change in a later filing is a formal SEC
+  restatement.** `restated_facts` is populated whenever a later filing
+  reports a different value for the same period, whatever the cause -
+  reclassification, a discontinued-operations recast, a presentation
+  change, or an actual restatement. The field name implies more
+  certainty about cause than the data actually supports.
 - **Fiscal-year discovery depends on `revenue` and `net_income`.** A
   company that tags neither under a recognized concept (unlikely but
   possible) would show zero discoverable fiscal years.
+- **Same-filing, same-period, multiple-tag entries were checked across
+  all five spiked companies** (not just the HBB case that prompted the
+  check) - 82 instances found. Most are genuinely different concepts a
+  company reports side by side (see the D&A/cash bullet above and
+  `short_term_debt`'s fix), not data-quality noise, but this was a
+  scan of five companies, not an exhaustive one - a similar issue for
+  a metric not yet checked this closely could still exist.
 
 ## Financial-metrics layer
 

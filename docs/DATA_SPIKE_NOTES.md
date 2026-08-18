@@ -208,3 +208,41 @@ as_of_date=2020-08-01 (정정 후) → $611,786,000 (정정값)
 
 의도한 대로 동작함을 확인. 회귀 방지 테스트는
 `tests/unit/test_margin_of_safety.py`에 HBB 실수치 기반으로 추가.
+
+---
+
+## 두 번째 코드 리뷰로 발견된 문제 — "같은 accn, 다른 tag" 전수조사에서 진짜 버그가 나옴
+
+리뷰에서 "HBB dual-tag는 우연히 값이 같아서 문제없었을 뿐, 값이 다른 일반적인
+케이스까지 해결된 건 아니다"라는 지적이 나와서, 실제로 5개 spike 기업 전체에
+대해 "같은 (period_end, accn)에 여러 candidate tag가 매칭되고 값도 다른" 케이스를
+전수조사했다. 결과: **82건 발견.** 이전 판단("실제로는 별 문제 없을 것")이 너무
+낙관적이었다.
+
+분류해보면:
+
+1. **AAPL `depreciation_amortization`**: `DepreciationDepletionAndAmortization`
+   (현금흐름표 add-back, 더 큰 값) vs `Depreciation`(PP&E 각주, 더 작은 값)이
+   매 연도 동시에 존재. 진짜로 다른 개념(전자가 무형자산 상각 포함, 후자는
+   유형자산 감가상각만)이라 fallback 우선순위가 우연히 FCFF에 맞는 걸(전자) 고르고
+   있음 — 다만 검증된 건 아니고 "그럴듯함" 수준.
+2. **AAPL `cash`**: `CashAndCashEquivalentsAtCarryingValue`(제한현금 제외) vs
+   `...RestrictedCashAndRestrictedCashEquivalents`(제한현금 포함)도 동시 존재.
+   현재는 좁은 쪽(제외)을 우선순위로 고르는데, `AssetsCurrent`가 제한현금을
+   포함하는지 확인 안 된 상태라 이것도 미해결 — LIMITATIONS.md에 열린 문제로 남김.
+3. **MSFT `short_term_debt`**: `ShortTermBorrowings`(상업어음)와
+   `LongTermDebtCurrent`(장기부채의 유동성 부분)가 **서로 다른, 상호보완적인
+   금액**으로 동시에 존재 (예: FY2015 $4,985M + $2,499M). 이건 대체 태그가 아니라
+   **더해야 하는 두 항목**이었다. 기존 fallback 방식은 하나만 고르고 나머지를
+   버려서 **FY2013 short_term_debt를 $0으로(실제 $2,999M) 계산하는 실제 버그**였다.
+
+**수정한 것은 3번뿐이다.** `_select_short_term_debt()`를 새로 만들어
+`ShortTermBorrowings + LongTermDebtCurrent`를 합산하고, 둘 다 없을 때만
+`DebtCurrent`로 fallback하도록 바꿨다(`DebtCurrent`가 다른 두 태그와 동시에
+존재하는 사례는 5개 기업 전체에서 없음을 먼저 확인). 실제 MSFT 데이터로
+FY2013 $0 → $2,999,000,000, FY2015 $4,985,000,000 → $7,484,000,000로
+정정된 것을 확인.
+
+**1, 2번(D&A/cash)은 고치지 않고 열린 문제로 남겼다** — 지금 우선순위가 우연히
+맞을 가능성이 높지만 "왜 맞는지"를 `AssetsCurrent`/현금흐름표 구조까지 파고들어
+검증하지 않은 상태에서 바꾸는 건 오히려 근거 없는 수정이 될 수 있다고 판단했다.

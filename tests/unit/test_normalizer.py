@@ -217,3 +217,92 @@ def test_same_accn_dual_tag_does_not_produce_a_bogus_restatement():
     assert statement.revenue.value == 743179000
     assert statement.revenue.xbrl_tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
     assert statement.restated_facts == []
+
+
+def test_short_term_debt_sums_complementary_components():
+    # Real MSFT FY2015 numbers: ShortTermBorrowings (commercial paper) and
+    # LongTermDebtCurrent (current portion of long-term debt) are both
+    # nonzero in the same filing - complementary balance-sheet lines, not
+    # alternate tags for the same figure. Picking one via fallback priority
+    # (the old behavior) would have understated short-term debt by $2,499M.
+    company_facts = {
+        "cik": 3,
+        "entityName": "MSFT-like",
+        **_facts(
+            {
+                "ShortTermBorrowings": [
+                    _entry(4985000000, "2015-06-30", fy=2015, filed="2015-07-31", accn="A-2015"),
+                ],
+                "LongTermDebtCurrent": [
+                    _entry(2499000000, "2015-06-30", fy=2015, filed="2015-07-31", accn="A-2015"),
+                ],
+                "Revenues": [
+                    _entry(93580000000, "2015-06-30", fy=2015, filed="2015-07-31", accn="A-2015",
+                           start="2014-07-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(12193000000, "2015-06-30", fy=2015, filed="2015-07-31", accn="A-2015",
+                           start="2014-07-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.short_term_debt.value == 7484000000
+    assert statement.short_term_debt.xbrl_tag == "ShortTermBorrowings+LongTermDebtCurrent"
+
+
+def test_short_term_debt_uses_single_component_when_only_one_present():
+    company_facts = {
+        "cik": 4,
+        "entityName": "AAPL-like",
+        **_facts(
+            {
+                "LongTermDebtCurrent": [
+                    _entry(10912000000, "2024-09-28", fy=2024, filed="2024-11-01", accn="A-2024"),
+                ],
+                "Revenues": [
+                    _entry(391035000000, "2024-09-28", fy=2024, filed="2024-11-01", accn="A-2024",
+                           start="2023-10-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(93736000000, "2024-09-28", fy=2024, filed="2024-11-01", accn="A-2024",
+                           start="2023-10-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.short_term_debt.value == 10912000000
+    assert statement.short_term_debt.xbrl_tag == "LongTermDebtCurrent"
+
+
+def test_short_term_debt_falls_back_to_debt_current_when_no_component_exists():
+    company_facts = {
+        "cik": 5,
+        "entityName": "GOOGL-like",
+        **_facts(
+            {
+                "DebtCurrent": [
+                    _entry(2000000000, "2024-12-31", fy=2024, filed="2025-02-01", accn="A-2024"),
+                ],
+                "Revenues": [
+                    _entry(350018000000, "2024-12-31", fy=2024, filed="2025-02-01", accn="A-2024",
+                           start="2024-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(100118000000, "2024-12-31", fy=2024, filed="2025-02-01", accn="A-2024",
+                           start="2024-01-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.short_term_debt.value == 2000000000
+    assert statement.short_term_debt.xbrl_tag == "DebtCurrent"

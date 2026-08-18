@@ -60,6 +60,9 @@ CONCEPT_CANDIDATES: dict[str, tuple[str, list[str]]] = {
             "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
         ],
     ),
+    # short_term_debt is NOT selected from this fallback chain - see
+    # _select_short_term_debt() and SHORT_TERM_DEBT_ADDITIVE_TAGS below.
+    # Kept here only so every metric has one CONCEPT_CANDIDATES entry.
     "short_term_debt": ("us-gaap", ["ShortTermBorrowings", "DebtCurrent", "LongTermDebtCurrent"]),
     # LongTermDebtNoncurrent only - NOT a fallback list with "LongTermDebt".
     # Checked live: AAPL/GOOGL/MSFT report both tags in the same filing with
@@ -84,6 +87,23 @@ DURATION_METRICS = {
     "depreciation_amortization",
     "capex",
 }
+
+# ShortTermBorrowings (commercial paper / revolving credit) and
+# LongTermDebtCurrent (the current portion of long-term debt) are
+# complementary balance-sheet lines, not alternate tags for one figure -
+# checked live against real data, not assumed: MSFT reports both nonzero
+# in the same filing (e.g. FY2015: ShortTermBorrowings=$4,985M,
+# LongTermDebtCurrent=$2,499M). Treating them as a fallback chain (pick
+# whichever sorts first) silently understates short-term debt whenever
+# both are present, since the other component gets dropped by the
+# same-accn dedup in _resolve_matches(). They're summed instead - see
+# _select_short_term_debt().
+SHORT_TERM_DEBT_ADDITIVE_TAGS = ("ShortTermBorrowings", "LongTermDebtCurrent")
+# DebtCurrent is a genuine alternative (a company reports its total current
+# debt as one line instead of splitting it) - checked live that it never
+# co-occurs with the two additive tags above for the same company, so it's
+# only tried when neither of them has a match for the period.
+SHORT_TERM_DEBT_FALLBACK_TAG = "DebtCurrent"
 
 _FINANCIAL_SIC_RANGE = range(6000, 6800)
 
@@ -150,13 +170,10 @@ def _discover_period_ends(facts_ns: dict) -> set[date]:
     return period_ends
 
 
-def _select_fact(
-    facts_ns: dict, metric: str, period_end: date
-) -> tuple[FinancialFact | None, list[FinancialFact]]:
-    taxonomy, tags = CONCEPT_CANDIDATES[metric]
-    is_duration = metric in DURATION_METRICS
+def _collect_matches(
+    facts_ns: dict, taxonomy: str, tags: list[str], period_end: date, *, is_duration: bool
+) -> list[tuple[str, str, dict]]:
     ns = facts_ns.get(taxonomy, {})
-
     matches: list[tuple[str, str, dict]] = []
     for tag in tags:
         concept = ns.get(tag)
@@ -169,11 +186,16 @@ def _select_fact(
                 if not _is_annual_entry(entry, is_duration=is_duration):
                     continue
                 matches.append((tag, unit, entry))
+    return matches
 
+
+def _resolve_matches(
+    matches: list[tuple[str, str, dict]], metric: str, taxonomy: str
+) -> tuple[FinancialFact | None, list[FinancialFact]]:
     if not matches:
         return None, []
 
-    matches.sort(key=lambda m: m[2]["filed"])
+    matches = sorted(matches, key=lambda m: m[2]["filed"])
     as_reported = _to_fact(metric, taxonomy, *matches[0])
 
     # This is how "one fact per filing" (finding #2) actually gets enforced:
@@ -196,6 +218,43 @@ def _select_fact(
         restated.append(_to_fact(metric, taxonomy, tag, unit, entry))
 
     return as_reported, restated
+
+
+def _select_fact(
+    facts_ns: dict, metric: str, period_end: date
+) -> tuple[FinancialFact | None, list[FinancialFact]]:
+    taxonomy, tags = CONCEPT_CANDIDATES[metric]
+    is_duration = metric in DURATION_METRICS
+    matches = _collect_matches(facts_ns, taxonomy, tags, period_end, is_duration=is_duration)
+    return _resolve_matches(matches, metric, taxonomy)
+
+
+def _select_short_term_debt(
+    facts_ns: dict, period_end: date
+) -> tuple[FinancialFact | None, list[FinancialFact]]:
+    taxonomy = "us-gaap"
+    component_results = [
+        _resolve_matches(
+            _collect_matches(facts_ns, taxonomy, [tag], period_end, is_duration=False),
+            "short_term_debt",
+            taxonomy,
+        )
+        for tag in SHORT_TERM_DEBT_ADDITIVE_TAGS
+    ]
+    as_reported_components = [fact for fact, _ in component_results if fact is not None]
+
+    if as_reported_components:
+        total = sum(fact.value for fact in as_reported_components)
+        combined_tag = "+".join(fact.xbrl_tag for fact in as_reported_components)
+        representative = max(as_reported_components, key=lambda fact: fact.filed_date)
+        as_reported = representative.model_copy(update={"value": total, "xbrl_tag": combined_tag})
+        restated = [fact for _, restated_list in component_results for fact in restated_list]
+        return as_reported, restated
+
+    fallback_matches = _collect_matches(
+        facts_ns, taxonomy, [SHORT_TERM_DEBT_FALLBACK_TAG], period_end, is_duration=False
+    )
+    return _resolve_matches(fallback_matches, "short_term_debt", taxonomy)
 
 
 def _to_fact(metric: str, taxonomy: str, tag: str, unit: str, entry: dict) -> FinancialFact:
@@ -223,7 +282,10 @@ def _build_statement(company: CompanyInfo, facts_ns: dict, period_end: date) -> 
     fiscal_year: int | None = None
 
     for metric in CONCEPT_CANDIDATES:
-        fact, restated = _select_fact(facts_ns, metric, period_end)
+        if metric == "short_term_debt":
+            fact, restated = _select_short_term_debt(facts_ns, period_end)
+        else:
+            fact, restated = _select_fact(facts_ns, metric, period_end)
         fields[metric] = fact
         restated_facts.extend(restated)
         if fact is None:

@@ -57,13 +57,29 @@ in `warnings`, never a silently-defaulted `0`.
 | `current_assets` | instant | `AssetsCurrent` |
 | `current_liabilities` | instant | `LiabilitiesCurrent` |
 | `cash` | instant | `CashAndCashEquivalentsAtCarryingValue`, `CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents` |
-| `short_term_debt` | instant | `ShortTermBorrowings`, `DebtCurrent`, `LongTermDebtCurrent` |
+| `short_term_debt` | instant | `ShortTermBorrowings` **+** `LongTermDebtCurrent` (summed), else `DebtCurrent` |
 | `long_term_debt` | instant | `LongTermDebtNoncurrent` **only** |
 | `stockholders_equity` | instant | `StockholdersEquity` |
 | `shares_outstanding` | instant | `CommonStockSharesOutstanding` (us-gaap, not dei) |
 
-Two entries above are deliberately single-tag with no fallback list:
+Three entries above deliberately don't use the standard "try each
+candidate tag, first match wins" fallback:
 
+- **`short_term_debt`** is a *sum*, not a fallback pick.
+  `ShortTermBorrowings` (commercial paper) and `LongTermDebtCurrent`
+  (the current portion of long-term debt) are complementary
+  balance-sheet lines, not alternate tags for the same figure - checked
+  live, not assumed: MSFT reports both nonzero in the same filing (FY2015:
+  $4,985M + $2,499M). An earlier version treated them as fallback
+  alternatives (first match wins), which silently understated
+  short-term debt by the other component's amount whenever both were
+  present - e.g. MSFT FY2013 came out as $0 instead of $2,999M. Found
+  by scanning all five spiked companies' companyfacts for same-filing,
+  multi-tag, *different*-value cases (82 instances across the five -
+  most are genuinely different concepts co-reported in one filing, not
+  data problems; see LIMITATIONS.md). `DebtCurrent` is used only when
+  neither component has a match for the period - checked live that it
+  never co-occurs with the other two for any of the five companies.
 - **`long_term_debt`**: `LongTermDebtNoncurrent` and `LongTermDebt` were
   both checked live against AAPL/GOOGL/MSFT and report *different
   values in the same filing* - `LongTermDebt` isn't just an alternate
@@ -150,3 +166,18 @@ relevant to this schema specifically:
 - Tag fallback lists reflect what AAPL/GOOGL/MSFT/JPM/HBB report today;
   a company using an unlisted tag will simply show up as a missing
   metric with a warning, not an error.
+- **`depreciation_amortization` and `cash`'s fallback candidates are not
+  confirmed to be interchangeable**, unlike `short_term_debt` where the
+  investigation was carried through to a fix. The same all-companies
+  scan that found the `short_term_debt` bug also found AAPL reporting
+  `DepreciationDepletionAndAmortization` (the broader cash-flow-statement
+  add-back) and `Depreciation` (narrower, PP&E-note-only) simultaneously
+  with different values in the same filing, and similarly
+  `CashAndCashEquivalentsAtCarryingValue` vs
+  `...RestrictedCashAndRestrictedCashEquivalents`. The current priority
+  order happens to pick the broader/more-FCFF-appropriate figure for
+  D&A and the narrower one for cash, which is plausible but **not
+  verified** against what `AssetsCurrent` actually includes (if it
+  includes restricted cash, the non-cash-NWC calc in
+  VALUATION_METHOD.md should probably subtract the broader cash figure
+  to stay consistent, not the narrower one) - see LIMITATIONS.md.
