@@ -26,6 +26,7 @@ from app.qualitative.risk_extraction import (
     QualitativeRiskAnalysis,
     RiskSeverity,
     extract_risks,
+    run_cross_model_extraction,
 )
 from app.qualitative.sentiment import SentimentSummary, score_sentiment
 from app.valuation.assumptions import ValuationAssumptions
@@ -54,6 +55,36 @@ class AnalysisResult(BaseModel):
     warnings: list[str]
 
 
+def _run_qualitative_extraction(
+    anthropic_client,
+    text: str,
+    source_label: str,
+    source_accession_number: str | None,
+    cross_validate: bool,
+) -> tuple[list[QualitativeRiskAnalysis], list[str]]:
+    if not cross_validate:
+        analysis = extract_risks(anthropic_client, text, source_label, source_accession_number)
+        return [analysis], []
+
+    cross_result = run_cross_model_extraction(
+        anthropic_client, text, source_label, source_accession_number
+    )
+    warnings: list[str] = []
+    if cross_result.failed_models:
+        total = len(cross_result.failed_models) + len(cross_result.analyses)
+        warnings.append(
+            f"{source_label} cross-model validation: {len(cross_result.failed_models)} of "
+            f"{total} model(s) failed - " + "; ".join(cross_result.failed_models)
+        )
+    elif cross_result.disagreement:
+        low, high = cross_result.high_severity_count_range
+        warnings.append(
+            f"{source_label} cross-model disagreement: high-severity risk count ranged "
+            f"{low}-{high} across models - review qualitative_analyses"
+        )
+    return cross_result.analyses, warnings
+
+
 def analyze(
     ticker: str,
     market_price: float,
@@ -66,6 +97,7 @@ def analyze(
     anthropic_client=None,
     include_sentiment: bool = False,
     sentiment_classifier=None,
+    cross_validate: bool = False,
 ) -> AnalysisResult:
     if (analyze_10k or earnings_call_text) and anthropic_client is None:
         raise QualitativeAnalysisError(
@@ -106,14 +138,11 @@ def analyze(
         filings = [f for f in list_recent_filings(submissions) if f.form == "10-K"]
         if filings:
             document = fetch_filing_document(client, cik, filings[0])
-            qualitative_analyses.append(
-                extract_risks(
-                    anthropic_client,
-                    document.text,
-                    "10-K",
-                    source_accession_number=document.accession_number,
-                )
+            new_analyses, cross_warnings = _run_qualitative_extraction(
+                anthropic_client, document.text, "10-K", document.accession_number, cross_validate
             )
+            qualitative_analyses.extend(new_analyses)
+            warnings.extend(cross_warnings)
             if include_sentiment:
                 sentiment_analyses.append(
                     score_sentiment(document.text, "10-K", classifier=sentiment_classifier)
@@ -121,9 +150,15 @@ def analyze(
             sources.append(document.document_url)
 
     if earnings_call_text:
-        qualitative_analyses.append(
-            extract_risks(anthropic_client, earnings_call_text, "Earnings call (user-provided)")
+        new_analyses, cross_warnings = _run_qualitative_extraction(
+            anthropic_client,
+            earnings_call_text,
+            "Earnings call (user-provided)",
+            None,
+            cross_validate,
         )
+        qualitative_analyses.extend(new_analyses)
+        warnings.extend(cross_warnings)
         if include_sentiment:
             sentiment_analyses.append(
                 score_sentiment(

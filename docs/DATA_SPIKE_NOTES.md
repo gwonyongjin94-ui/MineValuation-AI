@@ -246,3 +246,41 @@ FY2013 $0 → $2,999,000,000, FY2015 $4,985,000,000 → $7,484,000,000로
 **1, 2번(D&A/cash)은 고치지 않고 열린 문제로 남겼다** — 지금 우선순위가 우연히
 맞을 가능성이 높지만 "왜 맞는지"를 `AssetsCurrent`/현금흐름표 구조까지 파고들어
 검증하지 않은 상태에서 바꾸는 건 오히려 근거 없는 수정이 될 수 있다고 판단했다.
+
+---
+
+## V2 — 논문(Caridi et al., Electronics 2026) 기반 개선: self-check grounding, cross-model validation
+
+"AI-Assisted Value Investing" 논문(HITL gate, prompt self-check, cross-model
+검증)을 참고해서 `app/qualitative/risk_extraction.py`에 두 가지를 추가했다.
+
+**1. Grounding 필드 추가 후 real API로 재검증하다가 버그 두 개를 실제로 잡았다.**
+
+`supporting_quote`/`grounding` 필드를 스키마에 추가하고 실제 AAPL 10-K로
+돌렸더니:
+
+- `claude-sonnet-5`가 `max_tokens=2000`에서 중간에 잘림(`stop_reason=max_tokens`,
+  `tool_use.input == {}`) → `MAX_TOKENS`를 4096으로 올리고, truncation을
+  명시적으로 체크해서 `KeyError` 대신 명확한 `QualitativeAnalysisError`를 내도록 수정.
+- `MAX_TOKENS`를 올린 뒤에도 `claude-sonnet-5`가 **`risks` 배열에 6,456개
+  항목을 채우고 `summary`는 끝내 못 쓰는 완전히 망가진 응답**을 냄
+  (`stop_reason`은 `tool_use`로 정상 종료 — truncation이 아니라 순수
+  degenerate generation). JSON Schema의 `maxItems: 8`은 모델에게 힌트일 뿐
+  서버가 강제하는 제약이 아니라는 걸 실제로 확인.
+
+**2. Cross-model 검증을 실제로 돌려보니 Sonnet이 큰 문서에서 재현 가능하게 실패한다.**
+
+AAPL(~70K 토큰)과 HBB(~61K 토큰) 두 기업, 총 3회 실행에서 **`claude-sonnet-5`가
+매번** 위 degenerate 패턴으로 실패했고 `claude-haiku-4-5`는 매번 정상 완료했다.
+즉 이건 특정 문서의 우연이 아니라 **"6~7만 토큰대 문서 + 이 tool schema +
+Sonnet" 조합에서 재현되는 한계**로 보인다 — 우리가 실제로 다루는 문서 크기가
+전부 이 구간이라, 지금 상태로는 cross-model 검증에서 Sonnet 쪽이 사실상
+거의 항상 실패한다고 봐야 한다.
+
+**결정**: 원인을 더 파고들어 프롬프트를 고치기보다, `run_cross_model_extraction()`이
+한쪽 모델이 실패해도 죽지 않고 나머지 결과 + `failed_models` + `disagreement=True`로
+degrade하도록 만드는 쪽을 택했다. 논문 7.3절이 말하는 "verifier를 무오류로 취급하지
+않는다"는 원칙 그대로다 — cross-model 검증 인프라 자체는 갖췄고 실제로 한쪽이
+죽었을 때 전체가 죽지 않는다는 것까지 실증했지만, **지금 시점에는 사실상 Haiku
+단독 실행 + "Sonnet 검증 시도했으나 실패" 플래그**로 동작한다는 걸 정직하게
+남겨야 한다.

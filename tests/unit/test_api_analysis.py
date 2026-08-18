@@ -13,6 +13,7 @@ from tests.factories import (
     build_mock_sec_client,
     build_ticker_map_with_cache,
     fake_anthropic_client,
+    fake_anthropic_client_by_model,
     fake_sentiment_classifier,
     standard_company_facts,
 )
@@ -146,6 +147,30 @@ def test_analyze_endpoint_earnings_call_text_produces_analysis(client):
     assert len(body["qualitative_analyses"]) == 1
     assert body["qualitative_analyses"][0]["source_label"] == "Earnings call (user-provided)"
     assert body["qualitative_analyses"][0]["source_accession_number"] is None
+
+
+def test_analyze_endpoint_cross_validate_surfaces_partial_model_failure(client):
+    low_risk = {"label": "X", "description": "Y", "status": "emerging", "severity": "low"}
+    app.dependency_overrides[get_anthropic_client] = lambda: fake_anthropic_client_by_model(
+        risks_by_model={"claude-haiku-4-5-20251001": [low_risk]},
+        summary="minor risk",
+        truncated_models=frozenset({"claude-sonnet-5"}),
+    )
+
+    response = client.post(
+        "/api/v1/analyze",
+        json={
+            "ticker": "TSTX",
+            "market_price": 50.0,
+            "analyze_10k": True,
+            "cross_validate": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["qualitative_analyses"]) == 1
+    assert any("cross-model validation" in w for w in body["warnings"])
 
 
 def test_analyze_endpoint_returns_503_when_sentiment_unavailable(client, monkeypatch):

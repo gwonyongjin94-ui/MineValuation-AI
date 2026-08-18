@@ -157,6 +157,44 @@ set, `include_sentiment` needs the optional `[sentiment]` extra
 (`transformers`/`torch`) installed. Requesting either without the
 prerequisite returns `503`, not a crash or silent no-op.
 
+## Verification gates (HITL, paper-inspired)
+
+Caridi, Giovannini & Ricciardi Celsi, "AI-Assisted Value Investing"
+(Electronics 2026, 15, 1155) frames LLM-assisted equity analysis as a
+pipeline of human-in-the-loop gates (G1-G4: data verification, KPI/valuation
+checks, narrative validation, output delivery), on the premise that an LLM
+output is only trustworthy once it has passed a check independent of the
+model that produced it. This project didn't adopt the paper's gate
+machinery wholesale - most of it already existed as ordinary validation
+code before the paper was read - but the mapping is direct enough to be
+worth writing down, so a reader can see which paper concept corresponds to
+which existing mechanism instead of assuming none of them apply.
+
+| Paper gate | This project's mechanism | Where |
+|---|---|---|
+| G1: data verification | Explicit XBRL tag/taxonomy/accession/filed_date on every fact; missing data becomes `None` + a warning, never a silently-defaulted `0`; restatement-aware `as_of_date` resolution | `financials/normalizer.py`, `FinancialStatement.warnings` |
+| G2-G3: KPI/valuation checks | `ValuationAssumptions` validates `terminal_growth_rate < discount_rate` at construction, not at use; DCF never returns one point estimate - `run_sensitivity()` produces a 3x3 grid across discount rate and terminal growth; a warning fires when terminal value dominates the total valuation | `valuation/assumptions.py`, `valuation/dcf.py` |
+| G4: narrative validation | `supporting_quote` + `grounding` (`explicit`/`inferred`) required on every extracted qualitative risk, so a claim can be checked against the source text instead of taken on faith; `run_cross_model_extraction()` runs two independent Claude tiers and flags `disagreement` when their high-severity risk counts diverge, or when one model fails outright | `qualitative/risk_extraction.py` |
+| Output delivery / review trigger | `HIGH_SEVERITY_WARNING_THRESHOLD` adds a `warnings` entry when 2+ high-severity risks are found, telling the caller to read `qualitative_analyses` before trusting `margin_of_safety` alone | `services/analysis_service.py` |
+
+None of these gates auto-reject or auto-correct anything - every one of
+them adds a `warnings` string (or, for `ValuationAssumptions`, raises at
+construction time) and lets the caller decide. That's deliberate: the same
+"never merge quantitative and qualitative into one number" principle
+behind not having an Adjusted Margin of Safety (see VALUATION_METHOD.md)
+means a gate's job here is to surface uncertainty, not to resolve it on
+the caller's behalf.
+
+The cross-model gate's own reliability is itself an example of the paper's
+"treat the verifier as fallible" point (section 7.3): live testing found
+`claude-sonnet-5` reproducibly fails (degenerate tool-call output) on the
+~60-70K-token 10-K filings this project actually processes, while
+`claude-haiku-4-5` does not - see DATA_SPIKE_NOTES.md's "V2 — 논문 기반
+개선" section for the empirical writeup. `run_cross_model_extraction()`
+was built to degrade to the surviving model plus a `failed_models`/
+`disagreement` flag specifically because the verifier itself could not be
+assumed reliable.
+
 ## Configuration
 
 `app/config.py`'s `Settings` reads `.env` from a path anchored to the

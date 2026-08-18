@@ -49,9 +49,18 @@ curl -X POST localhost:8000/api/v1/analyze \
     "market_price": 230,
     "analyze_10k": true,
     "include_sentiment": true,
-    "earnings_call_text": "선택: 어닝콜 텍스트 직접 붙여넣기"
+    "earnings_call_text": "선택: 어닝콜 텍스트 직접 붙여넣기",
+    "cross_validate": true
   }'
 ```
+
+`cross_validate: true`는 정성 리스크 추출을 Claude 두 모델(haiku/sonnet)로
+각각 돌려서 결과가 갈리면 `disagreement` 경고를 남긴다 - LLM 호출 비용이
+두 배로 든다. 실데이터로는 `claude-sonnet-5`가 이 프로젝트가 실제로 다루는
+6~7만 토큰대 10-K에서 재현 가능하게 실패해서, 현재로선 사실상 "Haiku 결과 +
+Sonnet 실패 플래그"로 동작한다 - 자세한 내용은
+[LIMITATIONS.md](docs/LIMITATIONS.md)와
+[DATA_SPIKE_NOTES.md](docs/DATA_SPIKE_NOTES.md) 참고.
 
 ## 테스트
 

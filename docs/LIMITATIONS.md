@@ -146,6 +146,22 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   DATA_SPIKE_NOTES.md), and FinBERT sentiment adds tens of seconds of
   CPU inference time per request. Neither runs unless explicitly
   requested (`analyze_10k`/`earnings_call_text`/`include_sentiment`).
+- **`supporting_quote`/`grounding` are self-reported by the model, not
+  independently verified.** The prompt instructs the model to copy a
+  verbatim excerpt and mark it `explicit`/`inferred`, but nothing in
+  `risk_extraction.py` checks that `supporting_quote` is actually a
+  substring of the source text - a fabricated or paraphrased "verbatim"
+  quote would not be caught. This narrows the failure mode from
+  ungrounded claims to plausible-but-unverified ones; it doesn't
+  eliminate it. See ARCHITECTURE.md's "Verification gates" section.
+- **`cross_validate` is, in practice, closer to "Haiku result plus a
+  flag" than genuine two-model agreement.** Live testing found
+  `claude-sonnet-5` reproducibly fails (3/3 runs, two different
+  companies) on the ~60-70K-token filings this project actually
+  processes, while `claude-haiku-4-5` does not - see
+  DATA_SPIKE_NOTES.md's "V2 — 논문 기반 개선" section. Requesting
+  `cross_validate` still doubles the LLM cost even when only one
+  model's result ends up usable.
 
 ## Scope, generally
 

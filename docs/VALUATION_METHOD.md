@@ -188,6 +188,13 @@ signal to the LLM risk extraction, not a replacement for it - see
 DATA_MODEL.md and DATA_SPIKE_NOTES.md's V2 section for how the text is
 prepared and why FinBERT is self-hosted rather than a hosted API.
 
+Each extracted risk also carries `supporting_quote`/`grounding`, and
+`run_cross_model_extraction()` can run two Claude tiers and flag
+disagreement between them - see ARCHITECTURE.md's "Verification gates"
+section for how these map onto the human-in-the-loop checks described
+in the AI-Assisted Value Investing paper (Caridi et al., Electronics
+2026), and LIMITATIONS.md for what those checks do not cover.
+
 ## Defaults at the API boundary
 
 `app/api/analysis.py` defines `DEFAULT_ASSUMPTIONS` (5% FCFF growth,

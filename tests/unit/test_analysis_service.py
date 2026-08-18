@@ -13,6 +13,7 @@ from tests.factories import (
     build_mock_sec_client,
     build_ticker_map_with_cache,
     fake_anthropic_client,
+    fake_anthropic_client_by_model,
     fake_sentiment_classifier,
     standard_company_facts,
 )
@@ -173,6 +174,54 @@ def test_analyze_10k_include_sentiment_adds_summary(tmp_path):
     assert len(result.sentiment_analyses) == 1
     assert result.sentiment_analyses[0].source_label == "10-K"
     assert result.sentiment_analyses[0].sentence_count == 2
+
+
+def test_analyze_10k_cross_validate_reports_no_disagreement_when_models_agree(tmp_path):
+    low_risk = {"label": "X", "description": "Y", "status": "emerging", "severity": "low"}
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        analyze_10k=True,
+        anthropic_client=fake_anthropic_client_by_model(
+            risks_by_model={
+                "claude-haiku-4-5-20251001": [low_risk],
+                "claude-sonnet-5": [low_risk],
+            },
+            summary="minor risk",
+        ),
+        cross_validate=True,
+    )
+
+    assert len(result.qualitative_analyses) == 2
+    assert not any("cross-model" in w for w in result.warnings)
+
+
+def test_analyze_10k_cross_validate_warns_when_a_model_fails(tmp_path):
+    low_risk = {"label": "X", "description": "Y", "status": "emerging", "severity": "low"}
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        analyze_10k=True,
+        anthropic_client=fake_anthropic_client_by_model(
+            risks_by_model={"claude-haiku-4-5-20251001": [low_risk]},
+            summary="minor risk",
+            truncated_models=frozenset({"claude-sonnet-5"}),
+        ),
+        cross_validate=True,
+    )
+
+    assert len(result.qualitative_analyses) == 1
+    assert any(
+        "cross-model validation" in w and "failed" in w for w in result.warnings
+    )
 
 
 def test_analyze_without_include_sentiment_leaves_it_empty(tmp_path):

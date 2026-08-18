@@ -195,20 +195,72 @@ def bank_company_facts() -> dict:
     return {"cik": 888888, "entityName": "Test Bank Co", **sec_facts(tags)}
 
 
-def fake_anthropic_client(risks: list | None = None, summary: str = "", no_tool_use: bool = False):
-    """A stand-in for anthropic.Anthropic matching only what extract_risks() calls."""
+_RISK_DEFAULTS = {"supporting_quote": "the text says so", "grounding": "explicit"}
+
+
+def fake_anthropic_client(
+    risks: list | None = None,
+    summary: str = "",
+    no_tool_use: bool = False,
+    truncated: bool = False,
+):
+    """A stand-in for anthropic.Anthropic matching only what extract_risks() calls.
+
+    Each risk dict only needs the fields a given test cares about -
+    supporting_quote/grounding are filled in with defaults when omitted,
+    since most tests exercise severity/status logic, not those two fields.
+    truncated=True simulates stop_reason=="max_tokens" (a real failure mode
+    hit live with claude-sonnet-5 on a real 10-K before MAX_TOKENS was
+    raised - see risk_extraction.py).
+    """
+    filled_risks = [{**_RISK_DEFAULTS, **risk} for risk in (risks or [])]
     content = []
     if not no_tool_use:
         content.append(
-            SimpleNamespace(type="tool_use", input={"risks": risks or [], "summary": summary})
+            SimpleNamespace(type="tool_use", input={"risks": filled_risks, "summary": summary})
         )
     response = SimpleNamespace(
-        content=content, usage=SimpleNamespace(input_tokens=100, output_tokens=50)
+        content=content,
+        usage=SimpleNamespace(input_tokens=100, output_tokens=50),
+        stop_reason="max_tokens" if truncated else "tool_use",
     )
 
     class FakeMessages:
         def create(self, **kwargs):
             return response
+
+    return SimpleNamespace(messages=FakeMessages())
+
+
+def fake_anthropic_client_by_model(
+    risks_by_model: dict, summary: str = "", truncated_models: frozenset = frozenset()
+):
+    """Like fake_anthropic_client, but returns different risks per requested
+    model - for testing run_cross_model_extraction(), which calls the same
+    client with different `model=` values. truncated_models simulates one
+    model in a cross-model run hitting max_tokens while the other succeeds.
+    """
+
+    def response_for(model: str):
+        if model in truncated_models:
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="tool_use", input={})],
+                usage=SimpleNamespace(input_tokens=100, output_tokens=50),
+                stop_reason="max_tokens",
+            )
+        filled_risks = [{**_RISK_DEFAULTS, **risk} for risk in risks_by_model.get(model, [])]
+        content = [
+            SimpleNamespace(type="tool_use", input={"risks": filled_risks, "summary": summary})
+        ]
+        return SimpleNamespace(
+            content=content,
+            usage=SimpleNamespace(input_tokens=100, output_tokens=50),
+            stop_reason="tool_use",
+        )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return response_for(kwargs["model"])
 
     return SimpleNamespace(messages=FakeMessages())
 

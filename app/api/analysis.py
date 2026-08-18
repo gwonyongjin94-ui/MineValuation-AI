@@ -87,6 +87,13 @@ class AnalyzeRequest(BaseModel):
     # the server - opt-in rather than automatic so a server without it
     # doesn't silently fail whenever analyze_10k/earnings_call_text is used.
     include_sentiment: bool = False
+    # Runs extraction on two Claude tiers instead of one and flags
+    # disagreement - doubles the LLM cost, so opt-in. Confirmed live that
+    # claude-sonnet-5 can fail (degenerate output) on our real ~60-70k-token
+    # filing sizes while claude-haiku-4-5 succeeds - the result degrades to
+    # whichever model(s) succeeded rather than failing the whole request;
+    # see docs/DATA_SPIKE_NOTES.md's V2 section.
+    cross_validate: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -149,6 +156,7 @@ def analyze_ticker(
             anthropic_client=anthropic_client,
             include_sentiment=request.include_sentiment,
             sentiment_classifier=sentiment_classifier,
+            cross_validate=request.cross_validate,
         )
     except SECClientError as exc:
         status_code = _ERROR_STATUS.get(type(exc), _DEFAULT_SEC_ERROR_STATUS)
