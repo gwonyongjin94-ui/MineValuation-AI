@@ -125,14 +125,24 @@ MOS = (intrinsic_value - market_price) / intrinsic_value
 `compute_margin_of_safety(statements, assumptions, market_price,
 as_of_date)`:
 
-1. **Filters look-ahead bias first.** Any `FinancialStatement` whose
-   facts were filed after `as_of_date` is excluded before the DCF
-   runs, enforcing `filed_date <= as_of_date`. A valuation "as of" a
-   date must never use data that wasn't public yet on that date - see
-   DATA_SPIKE_NOTES.md finding #3, where a real 10-K/A changed a
-   reported figure after the fact. V1 doesn't backtest, but this check
-   is free to keep in place now and expensive to retrofit later.
-2. Runs the DCF on the remaining (eligible) statements.
+1. **Resolves each metric to what was actually known as of that date -
+   the as-reported fact, or a later restatement, whichever has the
+   latest `filed_date` that is still `<= as_of_date`.** This is two
+   things, and an earlier version only did the first:
+   - never use data that wasn't public yet (`filed_date <= as_of_date`
+     - the look-ahead-bias principle, see DATA_SPIKE_NOTES.md finding
+     #3, where a real 10-K/A changed a reported figure after the fact)
+   - but DO use a restatement once it *was* public - freezing at the
+     original pre-restatement number past that point is its own kind
+     of look-ahead-adjacent error (using known-superseded data instead
+     of what the market actually knew). Verified against real HBB data:
+     `as_of_date=2020-06-01` (before its 10-K/A) resolves FY2019 revenue
+     to the original $612,843,000; `as_of_date=2020-08-01` (after)
+     resolves it to the restated $611,786,000.
+   A fiscal year with nothing resolvable as of `as_of_date` (nothing
+   filed yet) is excluded the same way a wholly-future statement always
+   was.
+2. Runs the DCF on the remaining (eligible, as-of-date-resolved) statements.
 3. Computes MOS for the base case, plus `margin_of_safety_low/high`
    read directly off the DCF's own sensitivity grid (min/max
    `value_per_share`) - not a separately invented range. MOS is

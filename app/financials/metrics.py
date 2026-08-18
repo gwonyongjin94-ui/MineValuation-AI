@@ -4,11 +4,12 @@ Financial Analysis != Valuation: nothing here uses a discount rate, a
 growth assumption, or any forward-looking estimate - only arithmetic on
 already-reported facts.
 
-Net debt / leverage ratios are intentionally left out: the schema has no
-long-term-debt field (Phase 1.5 never spiked a tag for it), and guessing
-one now would repeat exactly the mistake this project has avoided so
-far. Add it properly (spike -> schema -> normalizer) before computing it
-here.
+Net debt / leverage ratios are still not computed here. FinancialStatement
+gained long_term_debt in Phase 5 (for the DCF's enterprise-to-equity-value
+bridge - see app/valuation/dcf.py's total_debt), but this module hasn't
+been revisited since to add a standalone net-debt/leverage ratio as a
+YearMetrics field. Not the same gap as before Phase 5 (the field exists
+now), just an unfinished follow-up.
 """
 
 from datetime import date

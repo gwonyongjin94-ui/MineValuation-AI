@@ -181,3 +181,39 @@ def test_classify_company_by_sic():
     assert classify_company("3571") == ValuationCategory.STANDARD
     assert classify_company(None) == ValuationCategory.UNSUPPORTED
     assert classify_company("not-a-number") == ValuationCategory.UNSUPPORTED
+
+
+def test_same_accn_dual_tag_does_not_produce_a_bogus_restatement():
+    # Reproduces a real case found in HBB's companyfacts: one 10-K (accn
+    # 0001709164-19-000004) tags FY2018 revenue under BOTH
+    # RevenueFromContractWithCustomerExcludingAssessedTax and the generic
+    # Revenues tag, with the identical value. Selecting matches purely by
+    # candidate-tag order without accn-awareness could double-count this as
+    # a same-period conflict; the accn dedup in _select_fact must collapse
+    # it to one fact and not flag the second tag as a restatement.
+    company_facts = {
+        "cik": 2,
+        "entityName": "HBB-like",
+        **_facts(
+            {
+                "RevenueFromContractWithCustomerExcludingAssessedTax": [
+                    _entry(743179000, "2018-12-31", fy=2018, filed="2019-03-06", accn="A-2018",
+                           start="2018-01-01"),
+                ],
+                "Revenues": [
+                    _entry(743179000, "2018-12-31", fy=2018, filed="2019-03-06", accn="A-2018",
+                           start="2018-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(30000000, "2018-12-31", fy=2018, filed="2019-03-06", accn="A-2018",
+                           start="2018-01-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.revenue.value == 743179000
+    assert statement.revenue.xbrl_tag == "RevenueFromContractWithCustomerExcludingAssessedTax"
+    assert statement.restated_facts == []

@@ -17,20 +17,30 @@ DEFAULT_COMPANY = CompanyInfo(
 )
 
 
-def make_fact(metric: str, value: float, period_end: str, fiscal_year: int) -> FinancialFact:
+def make_fact(
+    metric: str,
+    value: float,
+    period_end: str,
+    fiscal_year: int,
+    *,
+    filed_date: str | None = None,
+    form: str = "10-K",
+    accession_number: str | None = None,
+    xbrl_tag: str = "SomeTag",
+) -> FinancialFact:
     return FinancialFact(
         metric=metric,
         value=value,
         unit="USD",
         taxonomy="us-gaap",
-        xbrl_tag="SomeTag",
+        xbrl_tag=xbrl_tag,
         period_start=f"{fiscal_year - 1}-01-01",
         period_end=period_end,
         fiscal_year=fiscal_year,
         fiscal_period="FY",
-        form="10-K",
-        filed_date=f"{fiscal_year + 1}-02-01",
-        accession_number=f"ACCN-{fiscal_year}",
+        form=form,
+        filed_date=filed_date or f"{fiscal_year + 1}-02-01",
+        accession_number=accession_number or f"ACCN-{fiscal_year}",
     )
 
 
@@ -39,6 +49,7 @@ def make_statement(
     period_end: str,
     *,
     company: CompanyInfo = DEFAULT_COMPANY,
+    restated_facts: list | None = None,
     **metric_values: float | None,
 ) -> FinancialStatement:
     fields = {
@@ -49,6 +60,7 @@ def make_statement(
         company=company,
         fiscal_year=fiscal_year,
         period_end=period_end,
+        restated_facts=restated_facts or [],
         **fields,
     )
 

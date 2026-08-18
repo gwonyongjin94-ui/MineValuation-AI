@@ -169,3 +169,42 @@ FinBERT(`ProsusAI/finbert`)는 BERT 계열이라 컨텍스트가 ~512 토큰밖�
 `_get_classifier()` 함수 안에서 지연 로딩하기 때문에 모듈 자체는 문제없이
 import된다 — 실제로 별도 venv에 extra 없이 설치해서 앱 임포트와 테스트 스위트가
 정상 도는지 직접 확인했다.
+
+---
+
+## 코드 리뷰로 발견된 문제 — restatement가 as_of_date에 실제로 반영 안 되고 있었음
+
+Spike/테스트가 아니라 외부 코드 리뷰로 잡힌 문제. `docs/DATA_SPIKE_NOTES.md`
+결정사항 #3(normalizer는 as-reported를 기본값으로 쓰고 restated는 별도
+노출)은 정확히 구현돼 있었지만, **그 restated_facts를 실제로 소비하는
+쪽(margin_of_safety.py)이 만들어지지 않은 채로 방치**돼 있었다.
+
+`compute_margin_of_safety`의 look-ahead 필터는 as-reported fact의
+`filed_date`만 봤다. 그래서:
+
+```
+HBB FY2019 revenue
+  원본 10-K   filed 2020-02-26   $612,843,000
+  10-K/A      filed 2020-07-24   $611,786,000
+
+as_of_date = 2020-12-31 로 분석하면?
+  (수정 전) 여전히 $612,843,000 사용 — 그 시점에 시장은 이미
+  $611,786,000을 알고 있는데도
+```
+
+즉 look-ahead는 막지만(미래 데이터 사용 금지), 그 반대 방향인 "그 시점에
+이미 공개된 정정값을 반영"은 안 하고 있었다 — 결정사항 #3은 normalizer
+계층에서는 맞게 구현됐지만, valuation 계층에서 이어받지 못한 반쪽짜리
+구현이었다.
+
+**수정**: `_resolve_fact_as_of()`가 as-reported + restated_facts 전체 중
+`filed_date <= as_of_date`인 것들 가운데 **가장 늦게 filed된 것**(=그
+시점에 알려진 최신값)을 고르도록 변경. 실제 HBB 데이터로 검증:
+
+```
+as_of_date=2020-06-01 (정정 전) → $612,843,000 (원본)
+as_of_date=2020-08-01 (정정 후) → $611,786,000 (정정값)
+```
+
+의도한 대로 동작함을 확인. 회귀 방지 테스트는
+`tests/unit/test_margin_of_safety.py`에 HBB 실수치 기반으로 추가.

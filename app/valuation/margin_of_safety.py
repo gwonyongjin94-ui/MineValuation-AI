@@ -1,10 +1,24 @@
 """Market price + as_of_date -> margin of safety, as a range, not a point.
 
-as_of_date enforces filed_date <= as_of_date across every fact used in a
-statement: a valuation "as of" a date must never use financial data that
-wasn't public yet on that date (the look-ahead-bias principle from
-docs/DATA_SPIKE_NOTES.md, finding #3). V1 doesn't backtest, but the
-check costs nothing to enforce now and everything to bolt on later.
+as_of_date resolves each metric to the most-recently-known fact as of
+that date - the as-reported value, or a later restatement, whichever
+was actually public by then - not frozen at whatever was originally
+reported. Both parts matter and are easy to conflate:
+
+- filed_date <= as_of_date (never use data that wasn't public yet -
+  the look-ahead-bias principle from docs/DATA_SPIKE_NOTES.md finding
+  #3)
+- among everything that WAS public by as_of_date (the as-reported fact
+  and any restatements filed before it), use the latest one - a real
+  10-K/A restatement is public information the moment it's filed, and
+  an "as of" valuation after that date should reflect it, not the
+  superseded original figure.
+
+An earlier version of this module only implemented the first half
+(whole-statement look-ahead filtering by the as-reported fact's
+filed_date) and never consulted restated_facts at all, so an as_of_date
+well after a restatement still used the pre-restatement number - caught
+via code review, not spike or test.
 
 margin_of_safety_low/high come from the DCF's own sensitivity grid, not
 a separately invented range - MOS = (intrinsic - market) / intrinsic is
@@ -52,13 +66,38 @@ class MarginOfSafetyResult(BaseModel):
     warnings: list[str] = []
 
 
-def _statement_filed_date(statement: FinancialStatement) -> date | None:
-    dates = []
-    for field_name in _FACT_FIELDS:
-        fact: FinancialFact | None = getattr(statement, field_name)
-        if fact is not None:
-            dates.append(fact.filed_date)
-    return max(dates) if dates else None
+def _resolve_fact_as_of(
+    as_reported: FinancialFact | None,
+    restatements: list[FinancialFact],
+    as_of_date: date,
+) -> FinancialFact | None:
+    candidates = list(restatements)
+    if as_reported is not None:
+        candidates.append(as_reported)
+    known = [fact for fact in candidates if fact.filed_date <= as_of_date]
+    if not known:
+        return None
+    return max(known, key=lambda fact: fact.filed_date)
+
+
+def _resolve_statement_as_of(
+    statement: FinancialStatement, as_of_date: date
+) -> FinancialStatement | None:
+    restated_by_metric: dict[str, list[FinancialFact]] = {}
+    for fact in statement.restated_facts:
+        restated_by_metric.setdefault(fact.metric, []).append(fact)
+
+    resolved = {
+        field_name: _resolve_fact_as_of(
+            getattr(statement, field_name), restated_by_metric.get(field_name, []), as_of_date
+        )
+        for field_name in _FACT_FIELDS
+    }
+
+    if all(fact is None for fact in resolved.values()):
+        return None
+
+    return statement.model_copy(update=resolved)
 
 
 def _filter_look_ahead(
@@ -67,11 +106,11 @@ def _filter_look_ahead(
     eligible = []
     excluded = 0
     for statement in statements:
-        filed_date = _statement_filed_date(statement)
-        if filed_date is None or filed_date > as_of_date:
+        resolved = _resolve_statement_as_of(statement, as_of_date)
+        if resolved is None:
             excluded += 1
             continue
-        eligible.append(statement)
+        eligible.append(resolved)
     return eligible, excluded
 
 

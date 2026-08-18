@@ -176,6 +176,15 @@ def _select_fact(
     matches.sort(key=lambda m: m[2]["filed"])
     as_reported = _to_fact(metric, taxonomy, *matches[0])
 
+    # This is how "one fact per filing" (finding #2) actually gets enforced:
+    # once as_reported's accn is picked, every other match sharing that same
+    # accn - regardless of which tag it came from - is dropped here, never
+    # considered as a restatement candidate. A real case this guards
+    # against: HBB dual-tags one filing's revenue under both
+    # RevenueFromContractWithCustomerExcludingAssessedTax and the generic
+    # Revenues tag with an identical value - without this dedup, that
+    # second tag's entry would need separate handling to avoid being
+    # mistaken for a competing value from the same filing.
     restated: list[FinancialFact] = []
     seen_accn = {as_reported.accession_number}
     for tag, unit, entry in matches[1:]:
