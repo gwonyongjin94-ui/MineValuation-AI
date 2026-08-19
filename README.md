@@ -33,7 +33,18 @@ uvicorn app.main:app --reload
 pip install -e ".[dev,sentiment]"  # include_sentiment(FinBERT)용, ~1GB
 ```
 
-### 기본 사용 (정량만, 무료)
+### 가장 빠른 사용법 (서버 없이, 터미널에서 바로)
+
+서버를 안 띄우고 티커/현재가만 넣어서 바로 결과를 보고 싶으면:
+```bash
+python scripts/analyze.py AAPL 230
+```
+가정치는 항상 `DEFAULT_ASSUMPTIONS`(API 기본값과 동일: growth 5%, discount 9%,
+terminal 2.5%, tax 21%)를 쓴다 - 매번 값을 넣을 필요 없음. 정성분석/서버
+API의 나머지 옵션은 없고 딱 "티커+가격 → 내재가치/안전마진" 결과만 출력한다.
+
+### 기본 사용 (정량만, 무료) - HTTP API로
+
 ```bash
 curl -X POST localhost:8000/api/v1/analyze \
   -H "Content-Type: application/json" \
