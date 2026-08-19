@@ -129,6 +129,17 @@ Fiscal years are discovered (not assumed) by unioning the annual
 tags - the two concepts virtually every 10-K filer reports under a
 standard tag.
 
+`FinancialStatement.fiscal_year` is `period_end.year`, **not** any
+fact's `fiscal_year` (SEC's raw `fy`) - `fy` is a per-*filing* value
+applied to every fact in that filing, including prior-year
+comparatives, so it isn't safe to read as a per-period fiscal year.
+Verified live against all five spiked companies' full filing history:
+`period_end.year` matches every one of them (fiscal years are named
+after the calendar year the period ends in, including AAPL/MSFT's
+September/June year-ends). See LIMITATIONS.md for the untested
+opposite-convention case. `FinancialFact.fiscal_year` itself stays raw
+SEC provenance - only the derived statement-level field changed.
+
 ## V2: filing document text (`app/data/filing_documents.py`)
 
 Separate from `companyfacts` - this is the raw 10-K/10-Q document

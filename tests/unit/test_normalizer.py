@@ -281,6 +281,53 @@ def test_short_term_debt_uses_single_component_when_only_one_present():
     assert statement.short_term_debt.xbrl_tag == "LongTermDebtCurrent"
 
 
+def test_fiscal_year_derived_from_period_end_not_from_borrowed_filing_level_fy():
+    # Reproduces AAPL's real oldest 10-K (accn 0001193125-09-214859, filed
+    # 2009-10-27): SEC's raw `fy` is a per-filing DocumentFiscalYearFocus,
+    # not per-period - every fact in that one filing is stamped fy=2009,
+    # including the FY2007 and FY2008 comparative periods it also reports.
+    # Trusting fact.fiscal_year verbatim collapsed all three period_ends
+    # onto "fiscal_year: 2009" in FinancialStatement. Confirmed live that
+    # this filing-level stamping isn't unique to AAPL's earliest filing -
+    # every 10-K across AAPL/GOOGL/MSFT/JPM/HBB does it - it just usually
+    # self-corrects because the earliest-filed occurrence of a period is
+    # normally that period's own primary filing. FY2007/FY2008 never had
+    # one (XBRL wasn't mandatory yet), so they never self-correct.
+    company_facts = {
+        "cik": 320193,
+        "entityName": "AAPL-like",
+        **_facts(
+            {
+                "SalesRevenueNet": [
+                    _entry(24006000000, "2007-09-29", fy=2009, filed="2009-10-27", accn="OLDEST",
+                           start="2006-09-24"),
+                    _entry(32479000000, "2008-09-27", fy=2009, filed="2009-10-27", accn="OLDEST",
+                           start="2007-09-30"),
+                    _entry(36537000000, "2009-09-26", fy=2009, filed="2009-10-27", accn="OLDEST",
+                           start="2008-09-28"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(3496000000, "2007-09-29", fy=2009, filed="2009-10-27", accn="OLDEST",
+                           start="2006-09-24"),
+                    _entry(4834000000, "2008-09-27", fy=2009, filed="2009-10-27", accn="OLDEST",
+                           start="2007-09-30"),
+                    _entry(5704000000, "2009-09-26", fy=2009, filed="2009-10-27", accn="OLDEST",
+                           start="2008-09-28"),
+                ],
+            }
+        ),
+    }
+
+    statements = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert [s.fiscal_year for s in statements] == [2007, 2008, 2009]
+    assert [s.period_end.isoformat() for s in statements] == [
+        "2007-09-29",
+        "2008-09-27",
+        "2009-09-26",
+    ]
+
+
 def test_short_term_debt_falls_back_to_debt_current_when_no_component_exists():
     company_facts = {
         "cik": 5,

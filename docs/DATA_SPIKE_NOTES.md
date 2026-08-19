@@ -311,3 +311,13 @@ normalizer가 SEC XBRL의 `fy` 필드(그 사실이 태깅된 "필링 기준 회
 있다. AAPL의 초기 XBRL 태깅(2009년 전후, XBRL 의무화 초기)에서만 관찰됨 — 2010년
 이후 연도는 전부 정상. 이번 작업(fundamental growth rate) 범위 밖이라 고치지
 않고 관찰만 기록한다.
+
+**3. 후속 조사 후 수정 완료.** SEC `fy`는 fact별이 아니라 **필링 하나에 한 번
+찍히는 값**이라, 비교연도로 같이 보고된 이전 기간도 전부 같은 fy를 물려받는다
+(AAPL 2009년 필링만의 예외가 아니라 5개 spike 기업 전체·전체 필링 이력에서
+보편적으로 확인됨). `_build_statement()`가 `fact.fiscal_year` 대신
+`period_end.year`를 쓰도록 고쳤고(`app/financials/normalizer.py`, 상세는
+DATA_MODEL.md), 5개 기업 전체 실데이터로 재검증해 `fiscal_year` 중복·
+`period_end.year`와의 불일치 0건을 확인했다. 회계연도를 "끝나는 해"로 부르는
+관례를 가정하는데 5곳 모두 이 관례를 따르는 것만 확인됐다 — 반대 관례 기업은
+LIMITATIONS.md에 열린 문제로 남김.

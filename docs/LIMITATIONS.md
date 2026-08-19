@@ -58,6 +58,14 @@ as a starting point for analysis, not a verdict. Grouped by layer.
 - **Fiscal-year discovery depends on `revenue` and `net_income`.** A
   company that tags neither under a recognized concept (unlikely but
   possible) would show zero discoverable fiscal years.
+- **`FinancialStatement.fiscal_year` assumes fiscal years are named
+  after the calendar year they end in.** It's derived from
+  `period_end.year`, not SEC's raw `fy` field (see DATA_MODEL.md).
+  Verified against all five spiked companies (AAPL/GOOGL/MSFT/JPM/HBB),
+  but a company using the opposite naming convention (fiscal year named
+  after the year it mostly falls in or starts in - seen at some
+  retailers) hasn't been checked and would get a `fiscal_year` off by
+  one.
 - **Same-filing, same-period, multiple-tag entries were checked across
   all five spiked companies** (not just the HBB case that prompted the
   check) - 82 instances found. Most are genuinely different concepts a

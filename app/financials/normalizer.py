@@ -279,7 +279,6 @@ def _build_statement(company: CompanyInfo, facts_ns: dict, period_end: date) -> 
     fields: dict[str, FinancialFact | None] = {}
     restated_facts: list[FinancialFact] = []
     warnings: list[str] = []
-    fiscal_year: int | None = None
 
     for metric in CONCEPT_CANDIDATES:
         if metric == "short_term_debt":
@@ -290,12 +289,14 @@ def _build_statement(company: CompanyInfo, facts_ns: dict, period_end: date) -> 
         restated_facts.extend(restated)
         if fact is None:
             warnings.append(f"{metric}: no standard tag found for {period_end.isoformat()}")
-        elif fiscal_year is None:
-            fiscal_year = fact.fiscal_year
 
+    # Not fact.fiscal_year: SEC's raw `fy` is a per-filing value applied
+    # to every fact in that filing, including prior-year comparatives -
+    # not per-period (see DATA_MODEL.md). period_end.year is verified
+    # live to match all five spiked companies' actual fiscal-year naming.
     return FinancialStatement(
         company=company,
-        fiscal_year=fiscal_year if fiscal_year is not None else period_end.year,
+        fiscal_year=period_end.year,
         period_end=period_end,
         restated_facts=restated_facts,
         warnings=warnings,
