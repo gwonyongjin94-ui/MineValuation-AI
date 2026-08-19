@@ -173,6 +173,32 @@ def test_analyze_endpoint_cross_validate_surfaces_partial_model_failure(client):
     assert any("cross-model validation" in w for w in body["warnings"])
 
 
+def test_analyze_endpoint_uses_per_request_api_key_and_never_echoes_it(client, monkeypatch):
+    # The server-configured client is forced to None by the `client` fixture,
+    # so this only succeeds if the per-request key is what actually got used.
+    captured = {}
+
+    def fake_constructor(api_key):
+        captured["api_key"] = api_key
+        return fake_anthropic_client(risks=[], summary="fine")
+
+    monkeypatch.setattr("app.api.analysis.anthropic.Anthropic", fake_constructor)
+
+    response = client.post(
+        "/api/v1/analyze",
+        json={
+            "ticker": "TSTX",
+            "market_price": 50.0,
+            "analyze_10k": True,
+            "anthropic_api_key": "sk-ant-user-supplied-secret",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["api_key"] == "sk-ant-user-supplied-secret"
+    assert "sk-ant-user-supplied-secret" not in response.text
+
+
 def test_analyze_endpoint_returns_503_when_sentiment_unavailable(client, monkeypatch):
     monkeypatch.setattr("app.api.analysis.sentiment_is_available", lambda: False)
 

@@ -3,7 +3,7 @@ from datetime import date
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.config import get_settings
 from app.data.exceptions import SECClientError, UnknownTickerError
@@ -94,6 +94,19 @@ class AnalyzeRequest(BaseModel):
     # whichever model(s) succeeded rather than failing the whole request;
     # see docs/DATA_SPIKE_NOTES.md's V2 section.
     cross_validate: bool = False
+    # Lets a caller supply their own Anthropic key for this one request
+    # instead of relying on the server's ANTHROPIC_API_KEY - e.g. a
+    # multi-tenant deployment where each caller pays for their own LLM
+    # usage. SecretStr keeps it out of repr()/model_dump()/exception text
+    # by construction, so an accidental future `log.info(request)` or
+    # error dump can't leak it. It is used only to build an Anthropic
+    # client scoped to this single request (see analyze_ticker() below);
+    # nothing about the request - this key, earnings_call_text, or any
+    # other field - is written to a database, a file, or a log anywhere
+    # in this app, so it (and any personal information a caller pastes
+    # into earnings_call_text) does not outlive the request/response
+    # cycle it was submitted in.
+    anthropic_api_key: SecretStr | None = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -129,6 +142,16 @@ def analyze_ticker(
 ) -> AnalyzeResponse:
     assumptions = _resolve_assumptions(request.assumptions)
     as_of_date = request.as_of_date or date.today()  # noqa: DTZ011 - calendar date default is fine
+
+    # A per-request key takes priority over the server-configured one.
+    # Built fresh here, used only for this call, and held by this local
+    # variable alone - it goes out of scope (and is garbage-collected)
+    # the moment this function returns, with nothing else in the app
+    # ever storing or logging it.
+    if request.anthropic_api_key is not None:
+        anthropic_client = anthropic.Anthropic(
+            api_key=request.anthropic_api_key.get_secret_value()
+        )
 
     if (request.analyze_10k or request.earnings_call_text) and anthropic_client is None:
         raise HTTPException(

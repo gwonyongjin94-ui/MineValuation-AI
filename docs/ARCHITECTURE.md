@@ -195,6 +195,36 @@ was built to degrade to the surviving model plus a `failed_models`/
 `disagreement` flag specifically because the verifier itself could not be
 assumed reliable.
 
+## 요청 데이터 보관 정책 (request data retention)
+
+This app has no database and no request-logging middleware - nothing in
+`app/` writes an incoming request's body, or any field of it, to disk, to
+a log, or to any store that outlives the single request/response cycle
+FastAPI runs it through. Two fields carry data worth calling out
+explicitly because they can be sensitive:
+
+- **`anthropic_api_key`** (`app/api/analysis.py`) - an optional per-request
+  override of the server's `ANTHROPIC_API_KEY`, typed `pydantic.SecretStr`
+  so it can't leak through an accidental `repr()`/`model_dump()`/exception
+  dump later. When present, `analyze_ticker()` uses it to build a fresh
+  `anthropic.Anthropic` client held only by that function's local
+  `anthropic_client` variable - never returned, never assigned anywhere
+  else - so it is garbage-collected the moment the request finishes.
+- **`earnings_call_text`** (same file) - a caller-pasted transcript that
+  may contain names or other personal information. It flows straight
+  through `analysis_service.analyze()` into `extract_risks()`/
+  `score_sentiment()` as a plain in-memory string and is never written
+  anywhere; once the response is returned, nothing in the app still
+  references it.
+
+This is a property of the current architecture (stateless request
+handling, no persistence layer) rather than a scrubbing step bolted on
+after the fact - there's nothing to delete because nothing is ever
+written down in the first place. If a database, response cache, or
+request-logging middleware is ever added, whatever handles those two
+fields would need equivalent care (e.g. excluding them from any logged
+request representation) to keep this guarantee.
+
 ## Configuration
 
 `app/config.py`'s `Settings` reads `.env` from a path anchored to the

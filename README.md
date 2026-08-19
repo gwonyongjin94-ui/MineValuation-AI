@@ -62,6 +62,28 @@ Sonnet 실패 플래그"로 동작한다 - 자세한 내용은
 [LIMITATIONS.md](docs/LIMITATIONS.md)와
 [DATA_SPIKE_NOTES.md](docs/DATA_SPIKE_NOTES.md) 참고.
 
+### 개인 Anthropic 키로 호출하기 (서버 키 대신)
+
+서버의 `ANTHROPIC_API_KEY`를 쓰지 않고 요청마다 직접 키를 넣을 수도 있다
+(멀티테넌트 배포에서 호출자가 자기 LLM 비용을 직접 부담하는 경우 등):
+```bash
+curl -X POST localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ticker": "AAPL",
+    "market_price": 230,
+    "analyze_10k": true,
+    "anthropic_api_key": "sk-ant-..."
+  }'
+```
+이 키는 그 요청 하나를 처리하는 데만 쓰이고 응답에도 절대 다시 나타나지
+않는다 - `anthropic_api_key` 필드는 pydantic `SecretStr`라 실수로
+로그/에러메시지에 찍히는 걸 막아주고, 애초에 이 프로젝트는 DB도 없고
+요청을 파일이나 로그에 남기는 미들웨어도 없어서 요청이 끝나면 이 키도,
+`earnings_call_text`에 붙여넣은 텍스트(개인정보가 섞여 있을 수 있음)도
+메모리에서 같이 사라진다. 자세한 내용은
+[ARCHITECTURE.md](docs/ARCHITECTURE.md)의 "요청 데이터 보관 정책" 참고.
+
 ## 테스트
 
 ```bash
