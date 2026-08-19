@@ -90,6 +90,7 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | `financials/metrics.py` | Pure ratios (margins, growth, simple FCF) | Use a discount rate or forecast |
 | `valuation/assumptions.py` | Typed, validated assumption inputs | Contain a growth/discount/tax number itself |
 | `valuation/fcff.py` | FCFF per statement, base-FCFF selection | Discount anything |
+| `valuation/growth.py` | Reference fundamental growth rate (reinvestment rate x ROIC) from a company's own data | Feed into or override `assumptions.fcff_growth_rate` |
 | `valuation/dcf.py` | Project, discount, terminal value, sensitivity | Know about market price |
 | `valuation/margin_of_safety.py` | market price + as_of_date -> MOS range | Fetch market data |
 | `qualitative/risk_extraction.py` | Text -> structured qualitative risks (forced tool-use) | Fetch text, know its source |

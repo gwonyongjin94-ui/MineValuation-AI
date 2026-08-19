@@ -50,6 +50,15 @@ def test_analyze_endpoint_returns_valuation_with_default_assumptions(client):
     assert len(body["sources"]) == 2
     assert body["qualitative_analyses"] == []
 
+    # growth_rate = (net_capex + change_in_nwc) / invested_capital = 90/2470 -
+    # the NOPAT term cancels between reinvestment_rate and roic, so this is
+    # independent of the 0.21 default tax_rate (see test_growth.py for the
+    # tax-rate-dependent reinvestment_rate/roic breakdown).
+    growth = body["fundamental_growth_estimate"]
+    assert len(growth["by_year"]) == 2
+    assert growth["suggested_growth_rate"] == pytest.approx(90 / 2470)
+    assert growth["years_averaged"] == 1
+
 
 def test_analyze_endpoint_accepts_assumption_overrides(client):
     response = client.post(

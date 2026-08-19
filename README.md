@@ -40,6 +40,13 @@ curl -X POST localhost:8000/api/v1/analyze \
   -d '{"ticker": "AAPL", "market_price": 230}'
 ```
 
+모든 응답에는 `fundamental_growth_estimate`도 항상 같이 들어있다 - 회사의
+실제 재투자율(reinvestment rate) x ROIC로 계산한 "참고용" 성장률(Damodaran
+방법론)로, 요청에서 넣은 `fcff_growth_rate` 가정치를 절대 대체하지 않고
+나란히 보여주기만 한다. 별도 opt-in 없이 항상 계산됨 (SEC 데이터만 쓰고 LLM
+비용도 없어서). 자세한 공식은 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)
+참고.
+
 ### 정성분석 포함 (ANTHROPIC_API_KEY 필요, 호출당 비용 발생)
 ```bash
 curl -X POST localhost:8000/api/v1/analyze \

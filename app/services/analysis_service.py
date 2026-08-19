@@ -31,6 +31,7 @@ from app.qualitative.risk_extraction import (
 from app.qualitative.sentiment import SentimentSummary, score_sentiment
 from app.valuation.assumptions import ValuationAssumptions
 from app.valuation.dcf import UnsupportedValuationError
+from app.valuation.growth import FundamentalGrowthEstimate, estimate_fundamental_growth_rate
 from app.valuation.margin_of_safety import MarginOfSafetyResult, compute_margin_of_safety
 
 # Not a numeric MOS adjustment - deliberately. There's no defensible formula
@@ -49,6 +50,7 @@ class AnalysisResult(BaseModel):
     metrics: list[YearMetrics]
     margin_of_safety: MarginOfSafetyResult | None
     unsupported_reason: str | None
+    fundamental_growth_estimate: FundamentalGrowthEstimate
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     sources: list[str]
@@ -111,6 +113,7 @@ def analyze(
     company = build_company_info(company_facts, submissions)
     statements = normalize(company_facts, submissions)
     metrics = compute_metrics(statements)
+    fundamental_growth_estimate = estimate_fundamental_growth_rate(statements, assumptions.tax_rate)
 
     warnings = [
         f"FY{statement.fiscal_year}: {warning}"
@@ -187,6 +190,7 @@ def analyze(
         metrics=metrics,
         margin_of_safety=margin_of_safety,
         unsupported_reason=unsupported_reason,
+        fundamental_growth_estimate=fundamental_growth_estimate,
         qualitative_analyses=qualitative_analyses,
         sentiment_analyses=sentiment_analyses,
         sources=sources,

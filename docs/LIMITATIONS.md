@@ -90,6 +90,19 @@ as a starting point for analysis, not a verdict. Grouped by layer.
 - **No WACC calculator.** `discount_rate` must be supplied; V1 does
   not compute cost of equity (e.g. via CAPM/beta) or cost of debt from
   market data.
+- **`fundamental_growth_estimate` (reinvestment rate x ROIC, see
+  VALUATION_METHOD.md) is a reference figure only, and does not replace
+  the required `fcff_growth_rate` input.** It inherits every limitation
+  the FCFF calculation already has (EBIT approximated by operating
+  income, non-cash NWC's short_term_debt-defaults-to-0 behavior) plus
+  two of its own: it's purely backward-looking (a company's historical
+  reinvestment/return pattern, not a forecast of what it will do), and
+  it needs `stockholders_equity` for ROIC's denominator - a tag that,
+  unlike `short_term_debt`, is not defaulted to a fallback value when
+  missing, so a company without it (e.g. a bank, or a period before
+  consistent XBRL tagging - see DATA_SPIKE_NOTES.md's AAPL FY2007-2009
+  observation) simply gets `growth_rate: null` for that year with a
+  warning, not an estimate.
 - **Financial companies (banks, insurers - SIC 6000-6799) get no
   valuation at all**, not an adapted one. Damodaran's literature
   describes alternative approaches for these (e.g. treating regulatory

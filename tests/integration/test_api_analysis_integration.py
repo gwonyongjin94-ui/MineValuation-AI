@@ -21,6 +21,9 @@ def test_analyze_aapl_real_sec_data():
     assert body["margin_of_safety"] is not None
     assert body["margin_of_safety"]["intrinsic_value_per_share"] is not None
     assert len(body["sources"]) == 2
+    growth = body["fundamental_growth_estimate"]
+    assert len(growth["by_year"]) > 1
+    assert growth["suggested_growth_rate"] is not None
 
 
 def test_analyze_jpm_real_sec_data_is_unsupported():
@@ -31,6 +34,10 @@ def test_analyze_jpm_real_sec_data_is_unsupported():
     assert body["company"]["valuation_category"] == "financial"
     assert body["margin_of_safety"] is None
     assert body["unsupported_reason"] is not None
+    # Confirms DATA_SPIKE_NOTES.md finding #6 (no capex/operating-income
+    # tags for a bank) also means no computable fundamental growth rate -
+    # this degrades to warnings rather than crashing.
+    assert body["fundamental_growth_estimate"]["suggested_growth_rate"] is None
 
 
 def test_analyze_unknown_ticker_returns_404_real():

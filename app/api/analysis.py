@@ -16,6 +16,7 @@ from app.qualitative.sentiment import SentimentSummary
 from app.qualitative.sentiment import is_available as sentiment_is_available
 from app.services.analysis_service import analyze
 from app.valuation.assumptions import BaseFCFMethod, ValuationAssumptions
+from app.valuation.growth import FundamentalGrowthEstimate
 from app.valuation.margin_of_safety import MarginOfSafetyResult
 
 router = APIRouter()
@@ -115,6 +116,7 @@ class AnalyzeResponse(BaseModel):
     metrics: list[YearMetrics]
     margin_of_safety: MarginOfSafetyResult | None
     unsupported_reason: str | None
+    fundamental_growth_estimate: FundamentalGrowthEstimate
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     assumptions: ValuationAssumptions
@@ -194,6 +196,7 @@ def analyze_ticker(
         metrics=result.metrics,
         margin_of_safety=result.margin_of_safety,
         unsupported_reason=result.unsupported_reason,
+        fundamental_growth_estimate=result.fundamental_growth_estimate,
         qualitative_analyses=result.qualitative_analyses,
         sentiment_analyses=result.sentiment_analyses,
         assumptions=assumptions,

@@ -50,6 +50,17 @@ def test_analyze_end_to_end_with_mocked_sec(tmp_path):
     assert result.margin_of_safety.intrinsic_value_per_share is not None
     assert len(result.sources) == 2
 
+    # FY2023 is the first year (no prior-year NWC), so only FY2024 is
+    # computable: reinvestment_rate=(180-120+30)/900=0.1,
+    # roic=900/(30+320+2200-80)=900/2470
+    growth = result.fundamental_growth_estimate
+    assert len(growth.by_year) == 2
+    assert growth.by_year[0].growth_rate is None
+    assert growth.by_year[1].reinvestment_rate == pytest.approx(0.1)
+    assert growth.by_year[1].roic == pytest.approx(900 / 2470)
+    assert growth.suggested_growth_rate == pytest.approx(0.1 * (900 / 2470))
+    assert growth.years_averaged == 1
+
 
 def test_analyze_financial_company_has_no_margin_of_safety(tmp_path):
     result = analyze(

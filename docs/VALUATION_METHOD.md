@@ -62,6 +62,42 @@ Averaging multiple years, not just the latest one, is the default
 consistent with the project's value-investing framing, which favors
 normalized figures over a single snapshot.
 
+### Fundamental growth rate (reference only, `app/valuation/growth.py`)
+
+```
+reinvestment rate = (CapEx - D&A + change in non-cash NWC) / NOPAT
+ROIC              = NOPAT / (short_term_debt + long_term_debt
+                              + stockholders_equity - cash)
+fundamental growth rate = reinvestment rate * ROIC
+```
+
+Per Damodaran's fundamental-growth framework. `NOPAT`, `CapEx`, `D&A`,
+and `change in non-cash NWC` are the exact same per-year values
+`compute_fcff_series()` already computes above - this module reuses
+them rather than recomputing, so it's automatically consistent with
+however FCFF is calculated.
+
+`estimate_fundamental_growth_rate()` reports this per fiscal year plus
+a `suggested_growth_rate` (average of the most recent 3 computable
+years, same averaging rationale as base FCFF above). **It is a
+reference estimate only** - `analysis_service.analyze()` always returns
+it as `fundamental_growth_estimate`, alongside whatever
+`fcff_growth_rate` the caller actually supplied in `assumptions`, and
+never substitutes one for the other. This is the same side-by-side
+principle as qualitative risk vs. quantitative MOS (section 4 below):
+the DCF result should tell you what your assumption implies, and this
+should tell you what the company's own reinvestment/return history
+implies, and reconciling the two is the caller's judgment call, not
+something this project collapses into one number automatically.
+
+A negative or missing value here is informative, not a bug: a company
+that shrank its reinvestment (buybacks exceeding net capex, e.g. a
+mature company like AAPL in some recent fiscal years) or lacks
+`stockholders_equity`/balance-sheet tags (e.g. a bank - see
+DATA_SPIKE_NOTES.md finding #6) will legitimately show
+`suggested_growth_rate: null` or a negative number, with per-year
+`warnings` explaining why - never a silently wrong positive default.
+
 ## 2. DCF (`app/valuation/dcf.py`)
 
 ```

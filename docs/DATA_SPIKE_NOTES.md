@@ -284,3 +284,30 @@ degrade하도록 만드는 쪽을 택했다. 논문 7.3절이 말하는 "verifie
 죽었을 때 전체가 죽지 않는다는 것까지 실증했지만, **지금 시점에는 사실상 Haiku
 단독 실행 + "Sonnet 검증 시도했으나 실패" 플래그**로 동작한다는 걸 정직하게
 남겨야 한다.
+
+## V3 — 가정치(assumptions) 근거: fundamental growth rate 추가하며 실데이터로 관찰한 것
+
+`fcff_growth_rate`를 사용자가 직접 넣는 대신 데이터로 참고치를 계산해주는
+`app/valuation/growth.py`(Damodaran의 reinvestment rate × ROIC 공식)를 추가하고
+AAPL 실데이터로 돌려봤다.
+
+**1. `suggested_growth_rate`는 말이 되는 범위로 나온다.** AAPL 최근 3개 회계연도
+평균 fundamental growth rate가 약 **-3.4%**로 나옴 — 애플이 최근 몇 년간 순 CapEx
+대비 감가상각이 더 크고(사실상 net capex가 음수), 자사주 매입이 커서 재투자율
+자체가 마이너스인 걸 반영한 결과. 비정상값이 아니라 실제로 애플이 "성장에
+재투자"하는 단계를 지났다는 걸 숫자로 보여주는 사례 — 논문이나 이론이 아니라
+실제로 돌려봐야 이런 걸 확인할 수 있다.
+
+**2. 같은 `fiscal_year`가 여러 번 나오는 경우를 발견했다 (기존 normalizer 이슈,
+이번 작업 범위 밖).** AAPL의 가장 오래된 10-K(2009년 제출, accn
+0001193125-09-214859)에서 `fiscal_year=2009`로 태깅된 statement가 **3개**
+나온다 — period_end가 각각 2007-09-29, 2008-09-27, 2009-09-26으로 서로
+다른데도 전부 `fy=2009`. 같은 필링 안에 비교연도 데이터가 같이 들어있는데
+normalizer가 SEC XBRL의 `fy` 필드(그 사실이 태깅된 "필링 기준 회계연도")를
+그대로 `fiscal_year`로 쓰기 때문으로 보인다.
+`estimate_fundamental_growth_rate()`는 `period_end`로 정렬/매칭하기 때문에 계산
+자체는 영향받지 않지만(최근 3개년 평균도 정상), `financials`/`metrics` 응답에
+"fiscal_year: 2009"가 3번 찍혀서 API 응답만 보는 사람 입장에서는 혼란스러울 수
+있다. AAPL의 초기 XBRL 태깅(2009년 전후, XBRL 의무화 초기)에서만 관찰됨 — 2010년
+이후 연도는 전부 정상. 이번 작업(fundamental growth rate) 범위 밖이라 고치지
+않고 관찰만 기록한다.

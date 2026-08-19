@@ -134,9 +134,9 @@ def standard_company_facts() -> dict:
     """Two fiscal years with every metric needed for a full FCFF/DCF run."""
     years = [
         (2023, "2023-12-31", "2024-02-01", "A-2023", 5000, 700, 1000, 900, 100, 150, 500, 200, 50,
-         20, 300),
+         20, 300, 2000),
         (2024, "2024-12-31", "2025-02-01", "A-2024", 5500, 850, 1200, 1000, 120, 180, 600, 250, 80,
-         30, 320),
+         30, 320, 2200),
     ]
     tags = {
         "Revenues": [],
@@ -151,9 +151,10 @@ def standard_company_facts() -> dict:
         "DebtCurrent": [],
         "LongTermDebtNoncurrent": [],
         "CommonStockSharesOutstanding": [],
+        "StockholdersEquity": [],
     }
     for (fy, end, filed, accn, revenue, net_income, op_income, ocf, dep, capex, cur_assets,
-         cur_liab, cash, debt_cur, debt_lt) in years:
+         cur_liab, cash, debt_cur, debt_lt, equity) in years:
         start = f"{fy}-01-01"
         tags["Revenues"].append(sec_entry(revenue, end, fy, filed=filed, accn=accn, start=start))
         tags["NetIncomeLoss"].append(
@@ -177,6 +178,7 @@ def standard_company_facts() -> dict:
         tags["DebtCurrent"].append(sec_entry(debt_cur, end, fy, filed=filed, accn=accn))
         tags["LongTermDebtNoncurrent"].append(sec_entry(debt_lt, end, fy, filed=filed, accn=accn))
         tags["CommonStockSharesOutstanding"].append(sec_entry(1000, end, fy, filed=filed, accn=accn))
+        tags["StockholdersEquity"].append(sec_entry(equity, end, fy, filed=filed, accn=accn))
 
     return {"cik": 999999, "entityName": "Test Standard Co", **sec_facts(tags)}
 
