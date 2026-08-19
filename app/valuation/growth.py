@@ -20,6 +20,15 @@ overriding another.
 Reuses fcff.py's per-year NOPAT/CapEx/D&A/change-in-NWC (same non-cash
 NWC definition, not recomputed here) rather than duplicating that logic.
 See https://pages.stern.nyu.edu/~adamodar/New_Home_Page/valquestions/growth.htm
+
+A negative reinvestment rate times a negative ROIC multiplies to a
+POSITIVE growth_rate - a real sign trap, not a hypothetical one: found
+live on CRCL (Circle Internet Group), where a negative NOPAT and a
+negative reinvestment produced growth_rate=+27.7%, which reads as
+healthy growth but actually describes a company with a negative return
+on capital that is also shrinking its invested base. Flagged with an
+explicit warning rather than silently reported as a plain positive
+number.
 """
 
 from datetime import date
@@ -105,6 +114,12 @@ def _growth_year(
         else:
             roic = fcff_result.nopat / invested_capital
             growth_rate = reinvestment_rate * roic
+            if reinvestment_rate < 0 and roic < 0:
+                warnings.append(
+                    "reinvestment_rate and ROIC are both negative - growth_rate is a "
+                    "misleading positive number (two negatives multiplying), not a "
+                    "real growth signal"
+                )
 
     return FundamentalGrowthYear(
         fiscal_year=statement.fiscal_year,

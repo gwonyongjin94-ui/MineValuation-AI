@@ -1,3 +1,5 @@
+import pytest
+
 from app.data.models import CompanyInfo, FinancialFact, FinancialStatement, ValuationCategory
 from app.valuation.growth import estimate_fundamental_growth_rate
 
@@ -137,6 +139,38 @@ def test_missing_debt_defaults_to_zero_with_warning():
     year2_result = result.by_year[1]
     assert year2_result.roic == 900 / 1050
     assert "long_term_debt not found - assumed 0 for invested capital" in year2_result.warnings
+
+
+def test_negative_reinvestment_and_roic_warns_about_misleading_positive_growth():
+    # Reproduces the real CRCL (Circle Internet Group) case: a negative NOPAT
+    # gives a negative ROIC, and a positive net-capex+NWC swing over a
+    # negative NOPAT gives a negative reinvestment rate - the two negatives
+    # multiply to a *positive* growth_rate that looks like healthy growth
+    # but actually describes a shrinking, negative-return business.
+    year1 = _statement(
+        2023, "2023-12-31", operating_income=-50, depreciation_amortization=20, capex=50,
+        current_assets=500, current_liabilities=200, cash=50, short_term_debt=20,
+        stockholders_equity=500,
+    )
+    year2 = _statement(
+        2024, "2024-12-31", operating_income=-100, depreciation_amortization=20, capex=100,
+        current_assets=500, current_liabilities=200, cash=50, short_term_debt=20,
+        stockholders_equity=500,
+    )
+
+    result = estimate_fundamental_growth_rate([year1, year2], tax_rate=0.0)
+
+    # NWC is identical both years (same current_assets/liabilities/cash/
+    # short_term_debt), so change_in_nwc=0: reinvestment_rate = (100-20+0)/-100 = -0.8
+    # invested_capital = 20 + 0 (defaulted) + 500 - 50 = 470; roic = -100/470
+    year2_result = result.by_year[1]
+    assert year2_result.reinvestment_rate == -0.8
+    assert year2_result.roic == pytest.approx(-100 / 470)
+    assert year2_result.growth_rate == pytest.approx(-0.8 * (-100 / 470))
+    assert year2_result.growth_rate > 0
+    assert any(
+        "reinvestment_rate and ROIC are both negative" in w for w in year2_result.warnings
+    )
 
 
 def test_negative_invested_capital_skips_roic():

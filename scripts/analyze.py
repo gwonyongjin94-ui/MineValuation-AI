@@ -83,6 +83,16 @@ def main() -> int:
     growth = result.fundamental_growth_estimate
     print()
     print(f"fundamental growth estimate (reference only): {_pct(growth.suggested_growth_rate)}")
+    # Warnings only for the years that actually fed suggested_growth_rate
+    # (the most recent years_averaged computable years) - e.g. the "both
+    # reinvestment_rate and ROIC negative" sign trap, where two negatives
+    # multiply to a positive growth_rate that looks like healthy growth but
+    # isn't. Not the full by_year list, which also carries an older,
+    # unused year for every fiscal year with nothing computable.
+    computable_years = [y for y in growth.by_year if y.growth_rate is not None]
+    for year in computable_years[-growth.years_averaged :]:
+        for warning in year.warnings:
+            print(f"  ! FY{year.fiscal_year}: {warning}")
 
     # Only the warnings that bear on the number just printed (DCF/MOS-level -
     # terminal value dominance, look-ahead exclusions). The full response also

@@ -98,6 +98,16 @@ DATA_SPIKE_NOTES.md finding #6) will legitimately show
 `suggested_growth_rate: null` or a negative number, with per-year
 `warnings` explaining why - never a silently wrong positive default.
 
+**Sign trap: two negatives multiply to a misleading positive.** If
+`reinvestment_rate` and `roic` are *both* negative (a company with a
+negative NOPAT that is also shrinking its reinvestment), their product
+is a positive `growth_rate` that reads as healthy growth but describes
+the opposite - a business with a negative return on capital. Found
+live on CRCL (Circle Internet Group): `growth_rate=+27.7%` from
+`reinvestment_rate=-656%` and `roic=-4.2%`. `_growth_year()` adds an
+explicit per-year warning in this case rather than reporting the
+number unqualified.
+
 ## 2. DCF (`app/valuation/dcf.py`)
 
 ```
