@@ -104,6 +104,13 @@ class CompsEstimate(BaseModel):
     implied_value_per_share_ebitda: float | None = None
     implied_value_per_share_revenue: float | None = None
     implied_value_per_share_earnings: float | None = None
+    # min/max across whichever of the three implied values above are
+    # computable - the "conservative to optimistic" range for this
+    # method, on the same footing as DCF's/Owner Earnings' own ranges
+    # (see app/valuation/consensus.py). Not a confidence interval - just
+    # how far apart the three multiple-based methods land.
+    value_per_share_low: float | None = None
+    value_per_share_high: float | None = None
     warnings: list[str] = []
 
 
@@ -257,6 +264,12 @@ def estimate_comps(
         if median_pe is not None and target_net_income:
             implied_earnings = median_pe * (target_net_income / target_shares)
 
+    implied_values = [
+        v for v in (implied_ebitda, implied_revenue, implied_earnings) if v is not None
+    ]
+    value_low = min(implied_values) if implied_values else None
+    value_high = max(implied_values) if implied_values else None
+
     return CompsEstimate(
         industry_sic_prefix=prefix,
         peers=peers,
@@ -266,5 +279,7 @@ def estimate_comps(
         implied_value_per_share_ebitda=implied_ebitda,
         implied_value_per_share_revenue=implied_revenue,
         implied_value_per_share_earnings=implied_earnings,
+        value_per_share_low=value_low,
+        value_per_share_high=value_high,
         warnings=warnings,
     )

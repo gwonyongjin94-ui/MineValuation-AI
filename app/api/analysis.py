@@ -19,8 +19,10 @@ from app.qualitative.sentiment import is_available as sentiment_is_available
 from app.services.analysis_service import analyze
 from app.valuation.assumptions import BaseFCFMethod, ValuationAssumptions
 from app.valuation.comps import CompsEstimate
+from app.valuation.consensus import ValuationConsensus
 from app.valuation.growth import FundamentalGrowthEstimate
 from app.valuation.margin_of_safety import MarginOfSafetyResult
+from app.valuation.owner_earnings import OwnerEarningsDCFResult
 from app.valuation.wacc import WACCEstimate
 
 router = APIRouter()
@@ -147,6 +149,8 @@ class AnalyzeResponse(BaseModel):
     fundamental_growth_estimate: FundamentalGrowthEstimate
     wacc_estimate: WACCEstimate | None
     comps_estimate: CompsEstimate | None
+    owner_earnings_estimate: OwnerEarningsDCFResult | None
+    valuation_consensus: ValuationConsensus
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     assumptions: ValuationAssumptions
@@ -233,6 +237,8 @@ def analyze_ticker(
         fundamental_growth_estimate=result.fundamental_growth_estimate,
         wacc_estimate=result.wacc_estimate,
         comps_estimate=result.comps_estimate,
+        owner_earnings_estimate=result.owner_earnings_estimate,
+        valuation_consensus=result.valuation_consensus,
         qualitative_analyses=result.qualitative_analyses,
         sentiment_analyses=result.sentiment_analyses,
         assumptions=assumptions,

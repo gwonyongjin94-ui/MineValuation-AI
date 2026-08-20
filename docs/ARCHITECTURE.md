@@ -95,7 +95,9 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | `valuation/growth.py` | Reference fundamental growth rate (reinvestment rate x ROIC) from a company's own data | Feed into or override `assumptions.fcff_growth_rate` |
 | `valuation/wacc.py` | Reference WACC estimate (bottom-up beta, synthetic-rating cost of debt, live risk-free rate) | Feed into or override `assumptions.discount_rate` |
 | `valuation/comps.py` | Reference comps estimate (peer trading multiples -> implied value) | Feed into or override `margin_of_safety` |
-| `valuation/dcf.py` | Project, discount, terminal value, sensitivity | Know about market price |
+| `valuation/dcf.py` | Project, discount, terminal value, sensitivity - reused unchanged by owner_earnings.py | Know about market price |
+| `valuation/owner_earnings.py` | Owner Earnings (per Buffett) + a second DCF variant discounting it | Know about FCFF or NOPAT |
+| `valuation/consensus.py` | Intersect every available method's value-per-share range | Compute any range itself |
 | `valuation/margin_of_safety.py` | market price + as_of_date -> MOS range | Fetch market data |
 | `qualitative/risk_extraction.py` | Text -> structured qualitative risks (forced tool-use) | Fetch text, know its source |
 | `qualitative/sentiment.py` | Text -> FinBERT sentence-level sentiment | Fetch text, know its source |

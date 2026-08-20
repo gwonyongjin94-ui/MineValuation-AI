@@ -314,3 +314,19 @@ def test_analyze_endpoint_comps_estimate_omitted_by_default(client):
 
     assert response.status_code == 200
     assert response.json()["comps_estimate"] is None
+
+
+def test_analyze_endpoint_returns_owner_earnings_and_consensus(client):
+    response = client.post(
+        "/api/v1/analyze", json={"ticker": "TSTX", "market_price": 50.0}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    oe = body["owner_earnings_estimate"]
+    assert oe is not None
+    assert oe["value_per_share_low"] <= oe["value_per_share_high"]
+
+    consensus = body["valuation_consensus"]
+    methods = {r["method"] for r in consensus["ranges"]}
+    assert methods == {"DCF (FCFF)", "DCF (Owner Earnings)"}

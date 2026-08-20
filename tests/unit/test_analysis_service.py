@@ -385,3 +385,65 @@ def test_analyze_compute_comps_without_client_raises(tmp_path):
             ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
             compute_comps=True,
         )
+
+
+def test_analyze_always_computes_owner_earnings_estimate(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+    )
+
+    oe = result.owner_earnings_estimate
+    assert oe is not None
+    assert oe.value_per_share_low is not None
+    assert oe.value_per_share_high is not None
+    assert oe.value_per_share_low <= oe.value_per_share_high
+
+
+def test_analyze_owner_earnings_estimate_none_for_financial_company(tmp_path):
+    result = analyze(
+        ticker="TBNK",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(BANK_SUBMISSIONS, bank_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TBNK": 888888}),
+    )
+
+    assert result.owner_earnings_estimate is None
+    assert any("Owner Earnings DCF unavailable" in w for w in result.warnings)
+
+
+def test_analyze_valuation_consensus_combines_dcf_and_owner_earnings_ranges(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+    )
+
+    consensus = result.valuation_consensus
+    methods = {r.method for r in consensus.ranges}
+    # comps wasn't requested, so only the two DCF variants contribute.
+    assert methods == {"DCF (FCFF)", "DCF (Owner Earnings)"}
+    assert consensus.overlap_low is not None or "no overlap" in " ".join(consensus.warnings)
+
+
+def test_analyze_valuation_consensus_empty_for_financial_company(tmp_path):
+    result = analyze(
+        ticker="TBNK",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(BANK_SUBMISSIONS, bank_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TBNK": 888888}),
+    )
+
+    assert result.valuation_consensus.ranges == []
+    assert any("no valuation method produced a range" in w for w in result.valuation_consensus.warnings)

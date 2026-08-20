@@ -1,8 +1,11 @@
 # Valuation Method
 
-FCFF-based DCF, per Damodaran. This describes exactly what
-`app/valuation/{assumptions,fcff,dcf,margin_of_safety}.py` implement -
-not a general DCF tutorial.
+FCFF-based DCF, per Damodaran, plus a growing set of reference methods
+(Owner Earnings DCF, WACC estimate, Comps) intersected into one
+consensus range. This describes exactly what
+`app/valuation/{assumptions,fcff,dcf,margin_of_safety,growth,wacc,
+comps,owner_earnings,consensus}.py` implement - not a general valuation
+tutorial.
 
 ## 1. FCFF (`app/valuation/fcff.py`)
 
@@ -364,6 +367,101 @@ Peer prices come from `app/data/market_data.py`'s `fetch_current_price()`
 now formalized into the app. Unofficial/undocumented, no API key - see
 that function's docstring for the reliability caveat this carries that
 FRED and SEC EDGAR do not.
+
+## 6. Owner Earnings DCF (`app/valuation/owner_earnings.py`)
+
+```
+Owner Earnings = net_income + D&A - maintenance_capex - change_in_NWC
+```
+
+Per Buffett's 1986 Berkshire shareholder letter - a second DCF variant
+alongside section 2's FCFF-based one, reusing `dcf.py`'s `run_dcf()`/
+`run_sensitivity()` unchanged (they don't care what the "base cash
+flow" represents), just discounting owner earnings instead of FCFF.
+Two real differences from FCFF, not just a rename: owner earnings
+starts from **net income** (after interest and tax - an equity-level
+measure) rather than NOPAT (a firm-level, pre-interest measure), and it
+splits capex into a maintenance component rather than subtracting the
+total.
+
+Buffett's own letter admits maintenance capex "cannot be precisely
+calculated" from GAAP data and "must be a guess" - and no XBRL tag
+distinguishes maintenance from growth capex. Rather than inventing a
+single unverifiable split, this project bounds it:
+
+- **conservative**: maintenance capex = full capex (assumes zero growth
+  capex)
+- **optimistic**: maintenance capex = D&A only (a common analyst
+  heuristic - capex above D&A is growth)
+
+`owner_earnings_low`/`_high` take `min`/`max` of the two variants, not
+a hardcoded assignment, so the range stays correctly ordered even in
+the atypical case (capex < D&A) where the labels would otherwise flip.
+Verified live: for AAPL (capex ≈ D&A, a mature business needing little
+growth capex) the two variants land within ~0.2% of each other across
+recent years; for AMZN (capex >> D&A, heavy AI/data-center buildout)
+the 2025 spread between them is ~$66B - the range width itself is a
+real signal about how much of a company's capex is discretionary.
+
+`run_owner_earnings_dcf_valuation()` runs the full DCF+sensitivity
+twice (once from the conservative base, once from the optimistic base)
+and takes the min value-per-share from the low run and the max from
+the high run - combining the maintenance-capex uncertainty with the
+usual discount-rate/terminal-growth sensitivity into one range, same
+as `unsupported_reason` handling for financial companies (raises
+`UnsupportedValuationError`, caught by `analyze()`).
+
+## 7. Valuation Consensus (`app/valuation/consensus.py`)
+
+Every method that produces a value-per-share range - DCF (FCFF),
+Owner Earnings DCF, and Comps (when `compute_comps=True`) - contributes
+one `ValueRange(method, low, high)`. `compute_consensus()` intersects
+all of them:
+
+```
+overlap_low  = max(low_i for each available range)
+overlap_high = min(high_i for each available range)
+```
+
+If `overlap_low > overlap_high`, there is no consensus - the methods
+genuinely disagree, and this is reported explicitly as a warning
+(`overlap_low`/`overlap_high` come back `null`) rather than silently
+producing a nonsensical inverted range. This is the same "football
+field" comparison real institutions use when running DCF, comps, and
+precedent transactions side by side (see the JPM/BlackRock/Buffett
+methodology discussion this whole ranges-and-intersection design came
+out of) - precedent transactions analysis itself is not implemented in
+this project (no M&A deal-multiple data source), so the consensus here
+only ever spans up to three methods, not the full institutional set.
+
+Verified live: HD's three methods overlap tightly (DCF-FCFF
+$261-$464, Owner Earnings DCF $232-$414, Comps $236-$264 -> consensus
+$261-$264, a real 3-way agreement zone). NVDA's do not overlap at all
+(both DCF variants land around $23-$52, Comps lands at $139-$511 -
+`overlap_low`/`_high` are `null` with an explicit "no overlap" warning)
+- disagreement this stark between an absolute-valuation approach and a
+peer-multiple approach is itself informative, not a bug to paper over.
+
+`scripts/analyze.py`'s `format_range_chart()` renders these ranges (and
+the overlap, when one exists) as a terminal bar chart:
+
+```
+                      Valuation Range
+
+DCF (FCFF)                  ├──────────────────────────────────────────┤
+                            $261                                       $464
+
+DCF (Owner Earnings)  ├─────────────────────────────────────┤
+                      $232                                  $414
+
+Comps                  ├─────┤
+                       $236  $264
+
+Overlap                     ├─┤
+                            $261~$264
+```
+
+## Defaults at the API boundary
 
 `app/api/analysis.py` defines `DEFAULT_ASSUMPTIONS` (5% FCFF growth,
 9% discount rate, 2.5% terminal growth, 21% tax rate, 5-year forecast,

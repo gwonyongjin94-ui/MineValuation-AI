@@ -226,6 +226,46 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   (distinct from a precedent-transactions approach, which isn't
   implemented at all here).
 
+## Owner Earnings layer
+
+- **Maintenance capex is a bounded guess, not a measured figure** -
+  Buffett's own 1986 letter says as much, and no XBRL tag separates
+  maintenance from growth capex. The `full-capex`/`D&A-as-maintenance`
+  bracket (see VALUATION_METHOD.md) is a reasonable range, not a proof
+  that the true figure lies inside it - a company could plausibly need
+  MORE maintenance capex than either bound implies (e.g. deferred
+  maintenance catching up) or less (e.g. capex-light asset-light
+  expansion that still counts as "growth").
+- **Owner earnings inherits FCFF's non-cash-NWC definition and
+  short_term_debt-defaults-to-0 behavior** (same `compute_operating_nwc()`
+  call) - see the FCFF section's limitations above for what that does
+  and doesn't cover.
+- **Uses net income, not NOPAT** - so unlike FCFF, owner earnings is
+  sensitive to interest expense, one-time tax items, and other
+  below-the-operating-line noise that a firm-level measure would
+  exclude. This is intentional (owner earnings is meant to reflect what
+  flows to equity holders specifically), not an oversight, but it means
+  a year with an unusual tax benefit or a debt refinancing charge shows
+  up directly in the range in a way FCFF wouldn't.
+
+## Valuation Consensus layer
+
+- **Only spans whichever methods actually ran** - by default (no
+  `compute_comps`), consensus is only ever DCF-FCFF ∩ Owner Earnings
+  DCF; Comps only joins in when requested, and precedent-transactions
+  analysis isn't implemented at all (see the Comps layer section
+  above), so this is not the full three-to-four-method "football field"
+  a real deal team would build.
+- **No weighting between methods** - the intersection treats every
+  available range as equally authoritative. A method resting on a
+  single peer (see the Comps layer's thin-sample warning) counts the
+  same as DCF's 3x3 sensitivity grid when computing the overlap.
+- **"No overlap" is reported, not resolved** - when methods disagree
+  entirely, `overlap_low`/`overlap_high` come back `null` with a
+  warning naming the gap. This is deliberately not smoothed into "split
+  the difference" or any other reconciliation; two independent methods
+  landing in different neighborhoods is itself the finding.
+
 ## Qualitative layer (V2)
 
 - **No section-level extraction from filings.** Checked live against

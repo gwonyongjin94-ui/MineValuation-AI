@@ -40,8 +40,27 @@ pip install -e ".[dev,sentiment]"  # include_sentiment(FinBERT)용, ~1GB
 python scripts/analyze.py AAPL 230
 ```
 가정치는 항상 `DEFAULT_ASSUMPTIONS`(API 기본값과 동일: growth 5%, discount 9%,
-terminal 2.5%, tax 21%)를 쓴다 - 매번 값을 넣을 필요 없음. 정성분석/서버
-API의 나머지 옵션은 없고 딱 "티커+가격 → 내재가치/안전마진" 결과만 출력한다.
+terminal 2.5%, tax 21%)를 쓴다 - 매번 값을 넣을 필요 없음. 정성분석 옵션은
+없지만 comps는 기본으로 켜져 있어서, 마지막에 DCF(FCFF)/DCF(Owner Earnings)/
+Comps 세 방법의 범위를 터미널 바 차트로 같이 보여준다:
+```
+                      Valuation Range
+
+DCF (FCFF)                  ├──────────────────────────────────────────┤
+                            $261                                       $464
+
+DCF (Owner Earnings)  ├─────────────────────────────────────┤
+                      $232                                  $414
+
+Comps                  ├─────┤
+                       $236  $264
+
+Overlap                     ├─┤
+                            $261~$264
+```
+세 방법이 하나도 안 겹치면(예: NVDA - DCF는 $23~$52, Comps는 $139~$511)
+`Overlap` 바 대신 "no overlap" 경고가 뜬다 - 억지로 하나로 합치지 않고 방법들이
+의견이 갈린다는 걸 그대로 보여줌.
 
 ### 기본 사용 (정량만, 무료) - HTTP API로
 
@@ -57,6 +76,13 @@ curl -X POST localhost:8000/api/v1/analyze \
 나란히 보여주기만 한다. 별도 opt-in 없이 항상 계산됨 (SEC 데이터만 쓰고 LLM
 비용도 없어서). 자세한 공식은 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)
 참고.
+
+`owner_earnings_estimate`(Buffett의 Owner Earnings 기반 DCF)도 마찬가지로
+항상 계산된다 - 유지보수 capex를 정확히 나눌 방법이 없어서(SEC 태그에 없음)
+"capex 전부를 유지보수로 본 보수적 값" ~ "D&A만 유지보수로 본 낙관적 값"
+범위로 나온다. 그리고 `valuation_consensus`가 DCF(FCFF)/Owner Earnings DCF/
+(요청 시) Comps의 범위를 전부 모아서 **교집합**을 계산한다 - `overlap_low`/
+`overlap_high`가 그 값이고, 방법들이 안 겹치면 `null`+경고로 정직하게 표시.
 
 ### 정성분석 포함 (ANTHROPIC_API_KEY 필요, 호출당 비용 발생)
 ```bash

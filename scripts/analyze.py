@@ -16,9 +16,13 @@ from datetime import date
 
 from app.api.analysis import DEFAULT_ASSUMPTIONS
 from app.data.exceptions import SECClientError, UnknownTickerError
+from app.data.market_data import build_default_market_data_client
 from app.data.sec_client import build_default_client
 from app.data.ticker_map import build_default_ticker_map
 from app.services.analysis_service import analyze
+from app.valuation.consensus import ValueRange
+
+CHART_WIDTH = 50
 
 
 def _pct(value: float | None) -> str:
@@ -29,6 +33,66 @@ def _money(value: float | None) -> str:
     return f"${value:,.2f}" if value is not None else "n/a"
 
 
+def format_range_chart(ranges: list[ValueRange], width: int = CHART_WIDTH) -> str:
+    """Renders each method's [low, high] as a horizontal bar, scaled to a
+    shared axis across all of them - the "football field" chart real
+    valuation teams use to compare methods at a glance.
+
+        Comps        ├──────────┤
+                     $80       $100
+
+    Bar position is proportional to where [low, high] falls within the
+    overall min-max span across all ranges passed in, so bars are
+    visually comparable to each other, not just internally consistent.
+    """
+    if not ranges:
+        return ""
+
+    overall_low = min(r.low for r in ranges)
+    overall_high = max(r.high for r in ranges)
+    span = overall_high - overall_low or 1.0
+    name_width = max(len(r.method) for r in ranges)
+    label_col = name_width + 2
+
+    def _place(chars: str, start: int, into: list[str]) -> None:
+        # Grows the line rather than silently truncating - a label
+        # ending near/at the bar's right edge must not lose characters.
+        end = start + len(chars)
+        if end > len(into):
+            into.extend([" "] * (end - len(into)))
+        for i, ch in enumerate(chars):
+            into[start + i] = ch
+
+    lines = [" " * label_col + "Valuation Range", ""]
+    for r in ranges:
+        start_col = round((r.low - overall_low) / span * (width - 1))
+        end_col = round((r.high - overall_low) / span * (width - 1))
+        end_col = max(end_col, start_col + 2)
+        end_col = min(end_col, width - 1)
+
+        bar = [" "] * width
+        bar[start_col] = "├"
+        bar[end_col] = "┤"
+        for i in range(start_col + 1, end_col):
+            bar[i] = "─"
+        lines.append(r.method.ljust(name_width) + "  " + "".join(bar))
+
+        low_label = f"${r.low:,.0f}"
+        high_label = f"${r.high:,.0f}"
+        num_line: list[str] = [" "] * label_col
+        if end_col - start_col < len(low_label) + 1:
+            # too narrow to place both labels separately without
+            # overlapping - combine into one "$low~$high" label instead
+            _place(f"{low_label}~{high_label}", label_col + start_col, num_line)
+        else:
+            _place(low_label, label_col + start_col, num_line)
+            _place(high_label, label_col + end_col, num_line)
+        lines.append("".join(num_line).rstrip())
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ticker")
@@ -36,6 +100,7 @@ def main() -> int:
     args = parser.parse_args()
 
     client = build_default_client()
+    market_data_client = build_default_market_data_client()
     try:
         result = analyze(
             ticker=args.ticker.upper(),
@@ -44,6 +109,8 @@ def main() -> int:
             assumptions=DEFAULT_ASSUMPTIONS,
             client=client,
             ticker_map=build_default_ticker_map(),
+            compute_comps=True,
+            market_data_client=market_data_client,
         )
     except UnknownTickerError as exc:
         print(f"error: unknown ticker '{exc}' (not in the local ticker cache)", file=sys.stderr)
@@ -53,6 +120,7 @@ def main() -> int:
         return 1
     finally:
         client.close()
+        market_data_client.close()
 
     print(f"=== {result.company.ticker} - {result.company.name} ===")
     print(f"valuation category: {result.company.valuation_category.value}")
@@ -111,6 +179,22 @@ def main() -> int:
             f"({len(result.warnings)} additional per-fiscal-year data warning(s) omitted - "
             "use the HTTP API's `warnings` field for the full list)"
         )
+
+    consensus = result.valuation_consensus
+    if consensus.ranges:
+        chart_ranges = list(consensus.ranges)
+        if consensus.overlap_low is not None:
+            chart_ranges.append(
+                ValueRange(
+                    method="Overlap", low=consensus.overlap_low, high=consensus.overlap_high
+                )
+            )
+        print()
+        print(format_range_chart(chart_ranges))
+        if consensus.overlap_low is None:
+            print()
+            for warning in consensus.warnings:
+                print(f"  ! {warning}")
 
     return 0
 

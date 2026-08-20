@@ -2,10 +2,14 @@
 plus optional qualitative risk extraction (10-K text and/or a
 user-pasted earnings call transcript), optional FinBERT sentiment
 scoring of that same text, an optional WACC estimate from real market
-data (app/valuation/wacc.py), and an optional comparable-company
-analysis (app/valuation/comps.py). All three estimates (growth, WACC,
-comps) are reference figures only - never substituted into
-`assumptions` or `margin_of_safety`.
+data (app/valuation/wacc.py), an optional comparable-company analysis
+(app/valuation/comps.py), and an Owner Earnings DCF (per Buffett -
+app/valuation/owner_earnings.py). Growth/WACC/comps are reference
+figures only - never substituted into `assumptions` or
+`margin_of_safety`. DCF-FCFF, Owner Earnings DCF, and comps each
+produce their own conservative-to-optimistic value-per-share range;
+app/valuation/consensus.py computes the overlap across whichever of
+them are available for this request as `valuation_consensus`.
 
 Transport-agnostic on purpose: it raises the data-layer (SECClientError,
 UnknownTickerError), valuation-layer (UnsupportedValuationError), and
@@ -36,9 +40,11 @@ from app.qualitative.risk_extraction import (
 from app.qualitative.sentiment import SentimentSummary, score_sentiment
 from app.valuation.assumptions import ValuationAssumptions
 from app.valuation.comps import CompsEstimate, estimate_comps
+from app.valuation.consensus import ValuationConsensus, ValueRange, compute_consensus
 from app.valuation.dcf import UnsupportedValuationError
 from app.valuation.growth import FundamentalGrowthEstimate, estimate_fundamental_growth_rate
 from app.valuation.margin_of_safety import MarginOfSafetyResult, compute_margin_of_safety
+from app.valuation.owner_earnings import OwnerEarningsDCFResult, run_owner_earnings_dcf_valuation
 from app.valuation.wacc import FALLBACK_RISK_FREE_RATE, WACCEstimate, estimate_wacc
 
 # Not a numeric MOS adjustment - deliberately. There's no defensible formula
@@ -60,6 +66,8 @@ class AnalysisResult(BaseModel):
     fundamental_growth_estimate: FundamentalGrowthEstimate
     wacc_estimate: WACCEstimate | None
     comps_estimate: CompsEstimate | None
+    owner_earnings_estimate: OwnerEarningsDCFResult | None
+    valuation_consensus: ValuationConsensus
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     sources: list[str]
@@ -177,6 +185,48 @@ def analyze(
     except UnsupportedValuationError as exc:
         unsupported_reason = str(exc)
 
+    owner_earnings_estimate = None
+    try:
+        owner_earnings_estimate = run_owner_earnings_dcf_valuation(statements, assumptions)
+    except UnsupportedValuationError as exc:
+        warnings.append(f"Owner Earnings DCF unavailable: {exc}")
+
+    value_ranges = []
+    if margin_of_safety is not None and None not in (
+        margin_of_safety.intrinsic_value_low,
+        margin_of_safety.intrinsic_value_high,
+    ):
+        value_ranges.append(
+            ValueRange(
+                method="DCF (FCFF)",
+                low=margin_of_safety.intrinsic_value_low,
+                high=margin_of_safety.intrinsic_value_high,
+            )
+        )
+    if owner_earnings_estimate is not None and None not in (
+        owner_earnings_estimate.value_per_share_low,
+        owner_earnings_estimate.value_per_share_high,
+    ):
+        value_ranges.append(
+            ValueRange(
+                method="DCF (Owner Earnings)",
+                low=owner_earnings_estimate.value_per_share_low,
+                high=owner_earnings_estimate.value_per_share_high,
+            )
+        )
+    if comps_estimate is not None and None not in (
+        comps_estimate.value_per_share_low,
+        comps_estimate.value_per_share_high,
+    ):
+        value_ranges.append(
+            ValueRange(
+                method="Comps",
+                low=comps_estimate.value_per_share_low,
+                high=comps_estimate.value_per_share_high,
+            )
+        )
+    valuation_consensus = compute_consensus(value_ranges)
+
     sources = [
         f"https://data.sec.gov/submissions/CIK{cik}.json",
         f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
@@ -240,6 +290,8 @@ def analyze(
         fundamental_growth_estimate=fundamental_growth_estimate,
         wacc_estimate=wacc_estimate,
         comps_estimate=comps_estimate,
+        owner_earnings_estimate=owner_earnings_estimate,
+        valuation_consensus=valuation_consensus,
         qualitative_analyses=qualitative_analyses,
         sentiment_analyses=sentiment_analyses,
         sources=sources,

@@ -123,6 +123,16 @@ def test_estimate_comps_computes_median_and_implied_value(monkeypatch, peer_setu
     expected_implied = (implied_ev - 100_000_000 + 50_000_000) / 100_000_000
     assert result.implied_value_per_share_ebitda == pytest.approx(expected_implied)
 
+    # value_per_share_low/high span whichever of the three implied
+    # values (EBITDA/Revenue/Earnings multiples) were computable.
+    implied_values = [
+        result.implied_value_per_share_ebitda,
+        result.implied_value_per_share_revenue,
+        result.implied_value_per_share_earnings,
+    ]
+    assert result.value_per_share_low == pytest.approx(min(implied_values))
+    assert result.value_per_share_high == pytest.approx(max(implied_values))
+
     assert any("low-confidence sample" in w for w in result.warnings)
 
 
