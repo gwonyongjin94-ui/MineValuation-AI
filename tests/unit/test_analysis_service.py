@@ -1,8 +1,10 @@
 from datetime import date
 
+import httpx
 import pytest
 
 from app.data.exceptions import UnknownTickerError
+from app.data.market_data import MarketDataError
 from app.qualitative.risk_extraction import QualitativeAnalysisError
 from app.services.analysis_service import analyze
 from app.valuation.assumptions import ValuationAssumptions
@@ -10,6 +12,7 @@ from tests.factories import (
     BANK_SUBMISSIONS,
     STANDARD_SUBMISSIONS,
     bank_company_facts,
+    build_mock_market_data_client,
     build_mock_sec_client,
     build_ticker_map_with_cache,
     fake_anthropic_client,
@@ -252,3 +255,77 @@ def test_analyze_without_include_sentiment_leaves_it_empty(tmp_path):
     )
 
     assert result.sentiment_analyses == []
+
+
+def test_analyze_without_compute_wacc_leaves_wacc_estimate_none(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+    )
+
+    assert result.wacc_estimate is None
+
+
+def test_analyze_compute_wacc_produces_estimate(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        compute_wacc=True,
+        market_data_client=build_mock_market_data_client(4.50),
+    )
+
+    wacc = result.wacc_estimate
+    assert wacc is not None
+    assert wacc.risk_free_rate == pytest.approx(0.045)
+    # STANDARD_SUBMISSIONS' SIC 3571 matches the "357" prefix bucket.
+    assert wacc.industry == "Software (System & Application)"
+    assert wacc.cost_of_equity is not None
+    # standard_company_facts() has no InterestExpense tag, so cost of debt
+    # (and therefore a full WACC) can't be computed - degrades with a
+    # warning rather than guessing, same pattern as every other missing-tag
+    # case in this project.
+    assert wacc.cost_of_debt_aftertax is None
+    assert wacc.wacc is None
+    assert any("cannot estimate cost of debt" in w for w in wacc.warnings)
+
+
+def test_analyze_compute_wacc_without_client_raises(tmp_path):
+    with pytest.raises(MarketDataError):
+        analyze(
+            ticker="TSTX",
+            market_price=50.0,
+            as_of_date=date(2026, 1, 1),
+            assumptions=_assumptions(),
+            client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+            ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+            compute_wacc=True,
+        )
+
+
+def test_analyze_compute_wacc_degrades_to_warning_when_fetch_fails(tmp_path):
+    def erroring_handler(request):
+        raise httpx.ConnectError("boom", request=request)
+
+    broken_market_data_client = httpx.Client(transport=httpx.MockTransport(erroring_handler))
+
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        compute_wacc=True,
+        market_data_client=broken_market_data_client,
+    )
+
+    assert result.wacc_estimate is None
+    assert any("WACC estimate unavailable" in w for w in result.warnings)

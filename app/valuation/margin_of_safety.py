@@ -48,6 +48,7 @@ _FACT_FIELDS = (
     "long_term_debt",
     "stockholders_equity",
     "shares_outstanding",
+    "interest_expense",
 )
 
 

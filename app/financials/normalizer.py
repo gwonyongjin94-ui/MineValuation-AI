@@ -77,6 +77,27 @@ CONCEPT_CANDIDATES: dict[str, tuple[str, list[str]]] = {
     # align to period_end - verified against real AAPL/JPM data before
     # picking it.
     "shares_outstanding": ("us-gaap", ["CommonStockSharesOutstanding"]),
+    # InterestExpense was the common tag (HD/AAPL/JPM through ~FY2023) but
+    # is mid-migration, same as revenue's tag history - checked live: HD
+    # renamed it to InterestExpenseNonoperating starting with its FY2025
+    # 10-K (clean rename, confirmed identical values for the same
+    # comparative periods under both tags across accessions, not a
+    # different concept). Boeing has no InterestExpense fact at all in any
+    # year: its actual total interest expense (~$2.7-2.8B, matching its
+    # known debt load) is only under InterestAndDebtExpense.
+    # InterestExpenseDebt seen as an AAPL-reported alternate concept in
+    # some filings. Even with all four, AAPL's FY2024/2025 10-Ks report no
+    # discrete interest-expense concept at all under any of these tags -
+    # a real gap, left as None with a warning rather than guessed at.
+    "interest_expense": (
+        "us-gaap",
+        [
+            "InterestExpense",
+            "InterestExpenseNonoperating",
+            "InterestAndDebtExpense",
+            "InterestExpenseDebt",
+        ],
+    ),
 }
 
 DURATION_METRICS = {
@@ -86,6 +107,7 @@ DURATION_METRICS = {
     "operating_cash_flow",
     "depreciation_amortization",
     "capex",
+    "interest_expense",
 }
 
 # ShortTermBorrowings (commercial paper / revolving credit) and

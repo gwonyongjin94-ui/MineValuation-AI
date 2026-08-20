@@ -1,7 +1,9 @@
 """Wires SEC client -> normalizer -> metrics -> DCF -> margin of safety,
 plus optional qualitative risk extraction (10-K text and/or a
-user-pasted earnings call transcript) and optional FinBERT sentiment
-scoring of that same text.
+user-pasted earnings call transcript), optional FinBERT sentiment
+scoring of that same text, and an optional WACC estimate from real
+market data (app/valuation/wacc.py). Growth-rate and WACC estimates are
+both reference figures only - never substituted into `assumptions`.
 
 Transport-agnostic on purpose: it raises the data-layer (SECClientError,
 UnknownTickerError), valuation-layer (UnsupportedValuationError), and
@@ -16,6 +18,7 @@ from datetime import date
 from pydantic import BaseModel
 
 from app.data.filing_documents import fetch_filing_document, list_recent_filings
+from app.data.market_data import MarketDataError, fetch_risk_free_rate
 from app.data.models import CompanyInfo, FinancialStatement
 from app.data.sec_client import SECClient
 from app.data.ticker_map import TickerMap
@@ -33,14 +36,15 @@ from app.valuation.assumptions import ValuationAssumptions
 from app.valuation.dcf import UnsupportedValuationError
 from app.valuation.growth import FundamentalGrowthEstimate, estimate_fundamental_growth_rate
 from app.valuation.margin_of_safety import MarginOfSafetyResult, compute_margin_of_safety
+from app.valuation.wacc import WACCEstimate, estimate_wacc
 
 # Not a numeric MOS adjustment - deliberately. There's no defensible formula
 # for "how many dollars of intrinsic value one high-severity qualitative risk
 # is worth", and inventing one would repeat exactly the kind of unfounded
 # number this project has avoided everywhere else (no auto-derived tax rate,
-# no computed WACC, always a range instead of a point estimate). Instead this
-# threshold only decides whether a warning is added - the quantitative MOS
-# and the qualitative risks are always reported side by side, never merged.
+# always a range instead of a point estimate). Instead this threshold only
+# decides whether a warning is added - the quantitative MOS and the
+# qualitative risks are always reported side by side, never merged.
 HIGH_SEVERITY_WARNING_THRESHOLD = 2
 
 
@@ -51,6 +55,7 @@ class AnalysisResult(BaseModel):
     margin_of_safety: MarginOfSafetyResult | None
     unsupported_reason: str | None
     fundamental_growth_estimate: FundamentalGrowthEstimate
+    wacc_estimate: WACCEstimate | None
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     sources: list[str]
@@ -100,11 +105,15 @@ def analyze(
     include_sentiment: bool = False,
     sentiment_classifier=None,
     cross_validate: bool = False,
+    compute_wacc: bool = False,
+    market_data_client=None,
 ) -> AnalysisResult:
     if (analyze_10k or earnings_call_text) and anthropic_client is None:
         raise QualitativeAnalysisError(
             "qualitative analysis requested but no Anthropic client configured"
         )
+    if compute_wacc and market_data_client is None:
+        raise MarketDataError("compute_wacc requested but no market data client configured")
 
     cik = ticker_map.resolve(ticker)
     submissions = client.get_submissions(cik)
@@ -122,6 +131,17 @@ def analyze(
         for statement in statements
         for warning in statement.warnings
     ]
+
+    wacc_estimate = None
+    if compute_wacc and statements:
+        try:
+            risk_free_rate = fetch_risk_free_rate(market_data_client)
+            latest_statement = max(statements, key=lambda s: s.period_end)
+            wacc_estimate = estimate_wacc(
+                latest_statement, market_price, risk_free_rate, assumptions.tax_rate
+            )
+        except MarketDataError as exc:
+            warnings.append(f"WACC estimate unavailable: {exc}")
 
     margin_of_safety = None
     unsupported_reason = None
@@ -193,6 +213,7 @@ def analyze(
         margin_of_safety=margin_of_safety,
         unsupported_reason=unsupported_reason,
         fundamental_growth_estimate=fundamental_growth_estimate,
+        wacc_estimate=wacc_estimate,
         qualitative_analyses=qualitative_analyses,
         sentiment_analyses=sentiment_analyses,
         sources=sources,

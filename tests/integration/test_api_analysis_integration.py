@@ -46,3 +46,23 @@ def test_analyze_unknown_ticker_returns_404_real():
     )
 
     assert response.status_code == 404
+
+
+def test_analyze_compute_wacc_real_data():
+    # Hits real SEC EDGAR and real FRED (10-year Treasury yield) - both
+    # free, no API key, same tier of "always-on in CI" as the other
+    # real-SEC tests in this file.
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "HD", "market_price": 344.3, "compute_wacc": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    wacc = body["wacc_estimate"]
+    assert wacc is not None
+    assert wacc["industry"] == "Retail (Building Supply)"
+    assert 0 < wacc["risk_free_rate"] < 0.15
+    assert wacc["cost_of_equity"] is not None
+    # assumptions.discount_rate is never overwritten by the estimate.
+    assert body["assumptions"]["discount_rate"] == 0.09

@@ -353,3 +353,108 @@ def test_short_term_debt_falls_back_to_debt_current_when_no_component_exists():
 
     assert statement.short_term_debt.value == 2000000000
     assert statement.short_term_debt.xbrl_tag == "DebtCurrent"
+
+
+def test_interest_expense_tag_migration_reproduces_hd_case():
+    # HD renamed InterestExpense -> InterestExpenseNonoperating starting
+    # with its FY2025 10-K - confirmed live that the prior comparative
+    # period is re-tagged with an identical value under the new name in
+    # that filing (a clean rename, same as revenue's tag history), not a
+    # different concept coexisting with a different value.
+    company_facts = {
+        "cik": 1,
+        "entityName": "HD-like",
+        **_facts(
+            {
+                "Revenues": [
+                    _entry(150000000000, "2024-01-28", fy=2024, filed="2024-03-01",
+                           accn="A-2024", start="2023-01-30"),
+                    _entry(160000000000, "2025-02-02", fy=2025, filed="2025-03-01",
+                           accn="A-2025", start="2024-01-29"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(15000000000, "2024-01-28", fy=2024, filed="2024-03-01",
+                           accn="A-2024", start="2023-01-30"),
+                    _entry(16000000000, "2025-02-02", fy=2025, filed="2025-03-01",
+                           accn="A-2025", start="2024-01-29"),
+                ],
+                "InterestExpense": [
+                    _entry(1943000000, "2024-01-28", fy=2024, filed="2024-03-01",
+                           accn="A-2024", start="2023-01-30"),
+                ],
+                "InterestExpenseNonoperating": [
+                    # comparative re-report of the same FY2024 period, identical value
+                    _entry(1943000000, "2024-01-28", fy=2025, filed="2025-03-01",
+                           accn="A-2025", start="2023-01-30"),
+                    _entry(2321000000, "2025-02-02", fy=2025, filed="2025-03-01",
+                           accn="A-2025", start="2024-01-29"),
+                ],
+            }
+        ),
+    }
+
+    statements = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    fy2024, fy2025 = sorted(statements, key=lambda s: s.period_end)
+    assert fy2024.interest_expense.value == 1943000000
+    assert fy2024.interest_expense.xbrl_tag == "InterestExpense"
+    assert fy2025.interest_expense.value == 2321000000
+    assert fy2025.interest_expense.xbrl_tag == "InterestExpenseNonoperating"
+    assert fy2025.restated_facts == []
+
+
+def test_interest_expense_falls_back_to_interest_and_debt_expense_when_no_component_exists():
+    # Reproduces Boeing: no InterestExpense fact in any year - the real
+    # total interest expense (~$2.7-2.8B, matching its known debt load) is
+    # only under InterestAndDebtExpense.
+    company_facts = {
+        "cik": 2,
+        "entityName": "BA-like",
+        **_facts(
+            {
+                "Revenues": [
+                    _entry(66000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(2600000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "InterestAndDebtExpense": [
+                    _entry(2771000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.interest_expense.value == 2771000000
+    assert statement.interest_expense.xbrl_tag == "InterestAndDebtExpense"
+
+
+def test_interest_expense_missing_leaves_none_with_warning():
+    # Reproduces Apple's FY2024/2025 10-Ks: no discrete interest-expense
+    # concept reported under any known tag - a real gap, not guessed at.
+    company_facts = {
+        "cik": 3,
+        "entityName": "AAPL-like",
+        **_facts(
+            {
+                "Revenues": [
+                    _entry(391000000000, "2025-09-27", fy=2025, filed="2025-10-31",
+                           accn="A-2025", start="2024-09-29"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(112000000000, "2025-09-27", fy=2025, filed="2025-10-31",
+                           accn="A-2025", start="2024-09-29"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.interest_expense is None
+    assert "interest_expense: no standard tag found for 2025-09-27" in statement.warnings

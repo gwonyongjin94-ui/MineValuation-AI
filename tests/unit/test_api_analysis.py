@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 
 from app.api.analysis import (
     get_anthropic_client,
+    get_market_data_client,
     get_sec_client,
     get_sentiment_classifier,
     get_ticker_map,
@@ -10,6 +11,7 @@ from app.api.analysis import (
 from app.main import app
 from tests.factories import (
     STANDARD_SUBMISSIONS,
+    build_mock_market_data_client,
     build_mock_sec_client,
     build_ticker_map_with_cache,
     fake_anthropic_client,
@@ -30,6 +32,10 @@ def client(tmp_path):
     # Explicit None, not the real dependency - a real ANTHROPIC_API_KEY in the
     # local .env must never let a "not llm"-marked test make a real paid call.
     app.dependency_overrides[get_anthropic_client] = lambda: None
+    # Mocked, not the real FRED client - "not llm"-marked tests must stay
+    # fully offline, and compute_wacc defaults to False anyway so most
+    # tests never touch this, but the override still needs to exist.
+    app.dependency_overrides[get_market_data_client] = lambda: build_mock_market_data_client()
     yield TestClient(app)
     app.dependency_overrides.clear()
 
@@ -257,3 +263,26 @@ def test_analyze_endpoint_returns_sentiment_when_requested(client, monkeypatch):
     assert len(body["sentiment_analyses"]) == 1
     assert body["sentiment_analyses"][0]["source_label"] == "10-K"
     assert body["sentiment_analyses"][0]["sentence_count"] == 2
+
+
+def test_analyze_endpoint_returns_wacc_estimate_when_requested(client):
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "TSTX", "market_price": 50.0, "compute_wacc": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    wacc = body["wacc_estimate"]
+    assert wacc is not None
+    assert wacc["industry"] == "Software (System & Application)"
+    assert wacc["cost_of_equity"] is not None
+
+
+def test_analyze_endpoint_wacc_estimate_omitted_by_default(client):
+    response = client.post(
+        "/api/v1/analyze", json={"ticker": "TSTX", "market_price": 50.0}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["wacc_estimate"] is None

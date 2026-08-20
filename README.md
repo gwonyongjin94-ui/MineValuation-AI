@@ -102,6 +102,23 @@ curl -X POST localhost:8000/api/v1/analyze \
 메모리에서 같이 사라진다. 자세한 내용은
 [ARCHITECTURE.md](docs/ARCHITECTURE.md)의 "요청 데이터 보관 정책" 참고.
 
+### WACC(할인율) 참고 추정치 - 실제 시장데이터 사용
+
+```bash
+curl -X POST localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "AAPL", "market_price": 230, "compute_wacc": true}'
+```
+`compute_wacc: true`면 응답에 `wacc_estimate`가 추가된다 - 업종평균 베타
+(SIC 코드 기반) + 실시간으로 가져온 10년 국채금리(FRED) + 이자보상배율 기반
+신용등급으로 계산한 회사별 WACC 참고치. `fundamental_growth_estimate`와
+같은 원칙으로, `assumptions.discount_rate`(모든 종목에 동일 적용되는 값)를
+절대 대체하지 않고 옆에만 표시된다. 이 프로젝트에서 SEC EDGAR가 아닌 외부
+데이터(FRED 무위험금리)를 실제로 가져오는 유일한 부분 - 베타/ERP 테이블은
+Damodaran이 공개한 데이터를 문서화된 상수로 박아둔 거라 실시간은 아님.
+한계는 [LIMITATIONS.md](docs/LIMITATIONS.md), 계산식은
+[VALUATION_METHOD.md](docs/VALUATION_METHOD.md) 참고.
+
 ## 테스트
 
 ```bash

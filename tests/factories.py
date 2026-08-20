@@ -95,6 +95,15 @@ def build_mock_sec_client(
     return SECClient(user_agent="test", min_interval=0, client=httpx.Client(transport=transport))
 
 
+def build_mock_market_data_client(risk_free_rate_pct: float = 4.50) -> httpx.Client:
+    """A stand-in for the FRED client fetch_risk_free_rate() calls."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text=f"observation_date,DGS10\n2026-01-01,{risk_free_rate_pct}\n")
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
 def build_ticker_map_with_cache(tmp_path, mapping: dict) -> TickerMap:
     cache_path = tmp_path / "company_tickers.json"
     entries = {

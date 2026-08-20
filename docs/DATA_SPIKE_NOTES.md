@@ -338,3 +338,42 @@ ROIC 분모(투하자본)가 작아지면서 비율이 폭주함 — CRCL의 "�
 단, 과거 연도(3년 평균에 들어가는 나머지 2개년)는 그 시점 주가 데이터가 없어서
 여전히 장부가를 쓴다 — 그래서 `suggested_growth_rate`(3년 평균)는 최근 연도만큼
 완전히 고쳐지진 않는다. 이건 LIMITATIONS.md에 열린 한계로 남겼다.
+
+## V4 — WACC 참고치 추가: interest_expense 태그도 마이그레이션 중이었다
+
+`app/valuation/wacc.py`(업종평균 베타 + 실시간 무위험금리 + 이자보상배율 기반
+부채비용)를 만들면서 `interest_expense`를 새 정규화 필드로 추가했다.
+`InterestExpense` 태그 하나만 믿고 갔으면 안 됐다 — 실데이터로 확인:
+
+- **HD/AAPL/JPM 전부 `InterestExpense` 태그가 최근 연도(2024년 전후)에서
+  갑자기 안 잡힌다.** Revenue 태그 마이그레이션(finding #1)이랑 완전히 같은
+  패턴이 이자비용에서도 일어나고 있었다.
+- **HD**: `InterestExpenseNonoperating`로 개명함. FY2025 10-K에서 같은 기간
+  (FY2024)을 새 태그로 다시 보고하는데 값이 동일 — 깨끗한 개명, 다른 개념이
+  섞인 게 아님을 확인(accn 여러 개에 걸쳐 값 대조).
+- **BA(보잉)**: `InterestExpense` 태그가 애초에 존재한 적이 없다. 비슷한 이름의
+  `FinancingInterestExpense`는 $28-32M로 보잉 실제 이자비용(수십억 달러대)치고
+  터무니없이 작아서 함정 태그였음 — 진짜 총이자비용은 `InterestAndDebtExpense`
+  ($27.7억, 알려진 부채규모와 맞음).
+- **AAPL**: FY2024/2025 10-K 어디에도 "이자비용" 개념의 명시적 태그가 없다.
+  4개 후보 태그(`InterestExpense`, `InterestExpenseNonoperating`,
+  `InterestAndDebtExpense`, `InterestExpenseDebt`) 다 확인했지만 전부 없음 —
+  진짜 결측으로 보고 `null` + 경고로 처리, 억지로 추정하지 않음.
+
+→ 폴백 체인에 4개 태그를 순서대로 넣었고(`interest_expense` in
+`normalizer.py`), AAPL처럼 정말 없는 경우는 그대로 결측 처리한다.
+
+베타/ERP/신용등급 스프레드 테이블은 Damodaran이 공개한 자료(실시간 API 아님)를
+`wacc.py`에 출처·날짜와 함께 상수로 박아뒀다. 실제로 살아있는 API로 매번
+가져오는 건 무위험금리(FRED DGS10) 하나뿐 — 이게 이 프로젝트에서 SEC EDGAR가
+아닌 외부 데이터를 쓰는 유일한 지점이다.
+
+실데이터 검증(HD/BA/MSFT/JPM/NVDA, `market_price` 실시간값 사용):
+
+| 종목 | 업종 | WACC | 근거 |
+|---|---|---|---|
+| HD | Retail (Building Supply) | 10.25% | Aaa/AAA 등급 (이자보상배율 높음) |
+| MSFT | Software | 9.89% | Aaa/AAA 등급 |
+| NVDA | Semiconductor | 11.01% | 업종 베타 1.49로 가장 높음 |
+| BA | Aerospace/Defense | 8.33% | B2/B 등급(정크본드급)인데도 업종베타(0.85)가 낮아서 WACC 자체는 낮게 나옴 — 보잉 고유 리스크(737 MAX 사태)는 업종평균 베타로는 못 잡는다는 한계를 그대로 보여주는 사례 |
+| JPM | Banks (Regional) | 계산 안 됨 | 은행이라 operating_income/interest_expense 자체가 우리 태그로 안 잡힘(finding #6과 동일 이유) |

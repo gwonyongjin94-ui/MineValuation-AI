@@ -128,6 +128,53 @@ fiscal years still use book equity (no historical price series is
 available to value them contemporaneously), so `suggested_growth_rate`
 (a 3-year average) only partly corrects for this - see LIMITATIONS.md.
 
+### WACC estimate (reference only, `app/valuation/wacc.py`)
+
+```
+cost_of_equity = risk_free_rate + levered_beta * equity_risk_premium
+levered_beta   = industry_unlevered_beta * (1 + (1-tax_rate) * D/E)
+cost_of_debt   = risk_free_rate + synthetic_rating_spread(interest coverage)
+WACC           = E/(D+E) * cost_of_equity + D/(D+E) * cost_of_debt * (1-tax_rate)
+```
+
+Same status as fundamental growth rate above: `analyze()` returns this
+as `wacc_estimate` alongside whatever `discount_rate` the caller
+supplied, opt-in via `compute_wacc` (an extra request to FRED), and
+never substituted into `assumptions.discount_rate`.
+
+**The one part of this system that reaches outside SEC EDGAR.**
+`risk_free_rate` (10-year Treasury yield) is fetched live from FRED
+(`app/data/market_data.py`) because it cannot be derived from any
+company's own filings by definition - it's a government bond yield.
+`equity_risk_premium` and the industry-beta/synthetic-rating tables are
+NOT live-fetched (Damodaran publishes both as downloadable data, not a
+queryable API) - they're documented, dated constants in `wacc.py`,
+needing periodic manual updates, the same status as
+`DEFAULT_ASSUMPTIONS`.
+
+**Bottom-up (industry-average) beta, not a per-company regression.** A
+single company's own regression beta is noisy - this is Damodaran's own
+stated reason for averaging across an industry's regression betas
+instead of using one company's. This project doesn't fetch historical
+stock-price series at all (a genuine design boundary - see
+LIMITATIONS.md), so a true per-company regression beta was never an
+option either way; the industry-average approach happens to also be the
+one Damodaran recommends on the merits.
+
+Debt (D) uses SEC book value; equity (E) uses market value
+(`market_price * shares_outstanding`) - both computed the same way
+growth.py's near-zero-denominator fix above does. Cost of debt comes
+from Damodaran's synthetic-rating table keyed to interest coverage
+(`operating_income / interest_expense`) - `interest_expense` is a new
+normalized field (`app/financials/normalizer.py`), added and verified
+against real data alongside this feature: HD/AAPL/JPM used a plain
+`InterestExpense` tag through ~FY2023, then HD renamed it to
+`InterestExpenseNonoperating` starting its FY2025 10-K (confirmed a
+clean rename, not a different concept); Boeing has never had an
+`InterestExpense` fact at all, only `InterestAndDebtExpense`; Apple's
+FY2024/2025 10-Ks report no discrete interest-expense concept under any
+known tag - a real gap, left as `None` with a warning.
+
 ## 2. DCF (`app/valuation/dcf.py`)
 
 ```
@@ -155,10 +202,13 @@ valued, the equity-value bridge or per-share step is skipped with an
 explicit warning rather than silently treating the missing value as
 zero.
 
-**No discount rate (WACC) calculator.** `discount_rate` is a required
-user input, not computed from a cost-of-equity/cost-of-debt model -
-that would need market data (beta, cost of debt) V1 deliberately
-doesn't fetch. See LIMITATIONS.md.
+**`discount_rate` is a required user input, still never computed
+inside the DCF itself.** A reference WACC estimate exists
+(`wacc_estimate`, opt-in via `compute_wacc` - see section 1's WACC
+subsection above) but is deliberately never substituted for
+`assumptions.discount_rate`, the same side-by-side principle as
+`fundamental_growth_estimate`. See LIMITATIONS.md for what the estimate
+itself does not cover.
 
 ### Terminal value dominance warning
 

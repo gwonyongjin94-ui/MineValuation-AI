@@ -68,6 +68,7 @@ class FinancialStatement(BaseModel):
     long_term_debt: FinancialFact | None = None
     shares_outstanding: FinancialFact | None = None
     stockholders_equity: FinancialFact | None = None
+    interest_expense: FinancialFact | None = None
 
     # Facts for the same period found under a later accession number with a
     # different value (e.g. a 10-K/A). Never auto-substituted for the

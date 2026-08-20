@@ -2,11 +2,13 @@ from collections.abc import Iterator
 from datetime import date
 
 import anthropic
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
 from app.config import get_settings
 from app.data.exceptions import SECClientError, UnknownTickerError
+from app.data.market_data import build_default_market_data_client
 from app.data.models import CompanyInfo, FinancialStatement
 from app.data.sec_client import SECClient, build_default_client
 from app.data.ticker_map import TickerMap, build_default_ticker_map
@@ -18,6 +20,7 @@ from app.services.analysis_service import analyze
 from app.valuation.assumptions import BaseFCFMethod, ValuationAssumptions
 from app.valuation.growth import FundamentalGrowthEstimate
 from app.valuation.margin_of_safety import MarginOfSafetyResult
+from app.valuation.wacc import WACCEstimate
 
 router = APIRouter()
 
@@ -60,6 +63,14 @@ def get_sentiment_classifier():
     # Exists as a dependency (rather than passing None inline) so tests
     # can override it with a fake classifier without importing transformers.
     return None
+
+
+def get_market_data_client() -> Iterator[httpx.Client]:
+    client = build_default_market_data_client()
+    try:
+        yield client
+    finally:
+        client.close()
 
 
 class AssumptionsRequest(BaseModel):
@@ -108,6 +119,14 @@ class AnalyzeRequest(BaseModel):
     # into earnings_call_text) does not outlive the request/response
     # cycle it was submitted in.
     anthropic_api_key: SecretStr | None = None
+    # Estimates discount_rate (WACC) per-company from real market data
+    # (Damodaran's bottom-up industry beta + synthetic-rating cost of
+    # debt, plus a live-fetched 10-year Treasury yield - see
+    # app/valuation/wacc.py) instead of the same flat discount_rate for
+    # every ticker. Adds one extra request to FRED, so opt-in - and, like
+    # fundamental_growth_estimate, this is a reference figure only: it is
+    # never substituted for assumptions.discount_rate.
+    compute_wacc: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -117,6 +136,7 @@ class AnalyzeResponse(BaseModel):
     margin_of_safety: MarginOfSafetyResult | None
     unsupported_reason: str | None
     fundamental_growth_estimate: FundamentalGrowthEstimate
+    wacc_estimate: WACCEstimate | None
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     assumptions: ValuationAssumptions
@@ -141,6 +161,7 @@ def analyze_ticker(
     ticker_map: TickerMap = Depends(get_ticker_map),
     anthropic_client: anthropic.Anthropic | None = Depends(get_anthropic_client),
     sentiment_classifier=Depends(get_sentiment_classifier),
+    market_data_client: httpx.Client = Depends(get_market_data_client),
 ) -> AnalyzeResponse:
     assumptions = _resolve_assumptions(request.assumptions)
     as_of_date = request.as_of_date or date.today()  # noqa: DTZ011 - calendar date default is fine
@@ -182,6 +203,8 @@ def analyze_ticker(
             include_sentiment=request.include_sentiment,
             sentiment_classifier=sentiment_classifier,
             cross_validate=request.cross_validate,
+            compute_wacc=request.compute_wacc,
+            market_data_client=market_data_client,
         )
     except SECClientError as exc:
         status_code = _ERROR_STATUS.get(type(exc), _DEFAULT_SEC_ERROR_STATUS)
@@ -197,6 +220,7 @@ def analyze_ticker(
         margin_of_safety=result.margin_of_safety,
         unsupported_reason=result.unsupported_reason,
         fundamental_growth_estimate=result.fundamental_growth_estimate,
+        wacc_estimate=result.wacc_estimate,
         qualitative_analyses=result.qualitative_analyses,
         sentiment_analyses=result.sentiment_analyses,
         assumptions=assumptions,

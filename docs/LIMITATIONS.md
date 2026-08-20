@@ -5,9 +5,13 @@ as a starting point for analysis, not a verdict. Grouped by layer.
 
 ## Data layer
 
-- **SEC EDGAR is the only data source.** No cross-validation against
-  another provider. If SEC's own XBRL tagging is wrong for a company,
-  this system reproduces that error.
+- **SEC EDGAR is the only data source for every company-specific
+  fact.** No cross-validation against another provider - if SEC's own
+  XBRL tagging is wrong for a company, this system reproduces that
+  error. (The one exception: `compute_wacc`'s risk-free rate comes from
+  FRED, a macro/government figure with no company-specific counterpart
+  in SEC filings by definition - see VALUATION_METHOD.md's WACC
+  subsection.)
 - **Custom-taxonomy XBRL is not parsed.** `companyfacts` only
   aggregates standard taxonomies (`us-gaap`, `dei`, `ifrs-full`,
   `srt`). If a company reports an important figure only under a
@@ -95,9 +99,36 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   actual filings. Auto-deriving an effective or marginal rate would
   need `income_tax_expense` and `pretax_income`, which aren't
   normalized in the schema.
-- **No WACC calculator.** `discount_rate` must be supplied; V1 does
-  not compute cost of equity (e.g. via CAPM/beta) or cost of debt from
-  market data.
+- **`discount_rate` must still be supplied - a reference WACC estimate
+  exists but is never substituted for it.** `wacc_estimate` (opt-in via
+  `compute_wacc`, see VALUATION_METHOD.md) has real limitations of its
+  own:
+  - **Beta is industry-average (bottom-up), not a per-company
+    regression** - this project never fetches historical stock-price
+    series, so no company's own volatility/systematic-risk is captured.
+    A company with unusual company-specific risk (Boeing's 737 MAX
+    crisis, say) gets its industry's average beta, not a beta reflecting
+    its own actual trading behavior - Damodaran's stated reason for
+    preferring bottom-up beta (regression betas are noisy) is real, but
+    it's a real tradeoff, not a free upgrade.
+  - **The SIC-to-industry mapping (`INDUSTRY_UNLEVERED_BETA` in
+    wacc.py) is a coarse approximation covering ~35 SIC prefixes**, not
+    an exhaustive crosswalk to Damodaran's ~90-industry table - a
+    company whose SIC doesn't match any bucket gets a market-neutral
+    beta of 1.0 (a documented placeholder, not a sourced figure).
+  - **`equity_risk_premium` and the beta/synthetic-rating tables are
+    static, dated constants** (see wacc.py's module docstring for exact
+    source/date), not live-fetched - Damodaran publishes both as
+    downloadable data, not a queryable API, so keeping these current
+    needs a manual update, not a code change to use differently.
+  - **Cost of debt needs `interest_expense`, a field with real,
+    confirmed gaps**: Apple's FY2024/2025 10-Ks report no discrete
+    interest-expense concept under any tag this project knows about -
+    `wacc_estimate.cost_of_debt_aftertax`/`.wacc` come back `null` with
+    a warning for exactly this reason, not a bug.
+  - **Only `risk_free_rate` is genuinely live/external** (fetched from
+    FRED each time `compute_wacc=True`) - everything else above is
+    either SEC data or a documented constant.
 - **`fundamental_growth_estimate` (reinvestment rate x ROIC, see
   VALUATION_METHOD.md) is a reference figure only, and does not replace
   the required `fcff_growth_rate` input.** It inherits every limitation
