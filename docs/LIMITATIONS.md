@@ -132,6 +132,18 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   - **Only `risk_free_rate` is genuinely live/external** (fetched from
     FRED each time `compute_wacc=True`) - everything else above is
     either SEC data or a documented constant.
+  - **FRED's unauthenticated endpoint reproducibly fails from at least
+    one real cloud IP range (GitHub Actions' hosted runners, confirmed
+    2/2 on separate runs)**, while working normally from a residential
+    connection and while Yahoo Finance (comps.py's price source) worked
+    fine from the same blocked run - this looks like IP-range-based
+    blocking specific to FRED, not a generic network issue. Any
+    deployment on similar cloud/datacenter infrastructure could hit the
+    same thing. `analyze()` falls back to `wacc.FALLBACK_RISK_FREE_RATE`
+    (a dated constant, see that module) with an explicit warning rather
+    than losing `wacc_estimate` entirely when this happens - but that
+    means the risk-free rate silently used can be stale for as long as
+    the deployment keeps hitting this block, not just for one request.
 - **`fundamental_growth_estimate` (reinvestment rate x ROIC, see
   VALUATION_METHOD.md) is a reference figure only, and does not replace
   the required `fcff_growth_rate` input.** It inherits every limitation

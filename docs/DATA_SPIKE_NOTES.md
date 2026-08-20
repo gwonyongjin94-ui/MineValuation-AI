@@ -412,3 +412,23 @@ peer 수가 적으면 경고"로 바꿨다(`select_base_fcff()`의 "부족해도
 기준 내재가치 $338.5, EV/Revenue 기준 $139.1, P/E 기준 $510.7 — 세 방법이
 서로 크게 갈린다(반도체 업종 자체가 워낙 다양해서). 이것도 "하나의 숫자"로
 합치지 않고 세 배수 결과를 전부 그대로 노출한다.
+
+## CI에서 발견된 문제 — FRED가 GitHub Actions IP를 막고 있었다
+
+Comps 커밋(f7e8c03)을 푸시한 뒤 CI가 `test_analyze_compute_wacc_real_data`에서
+실패했다: `wacc_estimate`가 `None`으로 나옴. 로컬에서는 FRED가 정상 응답해서
+처음엔 일시적 네트워크 문제인가 싶었는데, **CI를 그대로 재실행해도 똑같이
+실패**(2/2) — 우연이 아니라 재현되는 문제였다.
+
+같은 CI 실행에서 **Yahoo Finance(comps의 peer 가격 소스)는 정상 동작**했다는
+게 결정적 단서였다 — 네트워크 자체가 막힌 게 아니라 **FRED만** GitHub Actions의
+호스팅 러너 IP 대역을 막고 있는 것으로 보인다(스크래핑 방지용 IP 평판 차단으로
+추정, FRED 쪽 정책이라 우리가 확인/제어할 방법은 없음). 이건 CI만의 문제가
+아니라 **AWS/GCP/Azure 등 클라우드에 이 앱을 배포하면 똑같이 겪을 수 있는
+실서비스 신뢰성 문제**라고 판단했다.
+
+**결정**: FRED fetch가 실패하면 `wacc_estimate` 전체를 포기하는 대신,
+`wacc.py`에 실측 기반 fallback 상수(`FALLBACK_RISK_FREE_RATE`, 이 기능
+개발 중 실제로 관찰한 4.7%)를 문서화해서 넣고, 실패 시 그 값으로 대체하되
+경고를 남기도록 고쳤다(`analysis_service.py`). CRCL/HD/BA 때와 같은
+원칙 — 죽이지 않고 degrade, 근데 왜 degrade됐는지는 숨기지 않는다.

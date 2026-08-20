@@ -20,6 +20,18 @@ sourced and dated, the same status as DEFAULT_ASSUMPTIONS elsewhere in
 this project. They need periodic manual updates, not a code change to
 use differently.
 
+FALLBACK_RISK_FREE_RATE exists because the live fetch has a real,
+confirmed failure mode: FRED's unauthenticated fredgraph.csv endpoint
+reproducibly failed from GitHub Actions' hosted-runner IP range (2/2
+runs) while working fine from a normal residential connection in the
+same session, and Yahoo Finance (comps.py's peer-price source) worked
+from the exact same CI run - so this isn't a generic network problem,
+it looks like IP-range-based blocking specific to FRED. Any deployment
+on similar cloud/datacenter infrastructure could hit the same thing, not
+just CI - so analysis_service.py falls back to this dated constant
+(with an explicit warning) rather than dropping wacc_estimate entirely
+when the live fetch fails.
+
 Sources (both accessed 2026-08-20):
 - ERP: https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/
   (implied ERP, January 2026 update) = 4.23%
@@ -44,6 +56,13 @@ from app.data.models import FinancialStatement
 # Damodaran, implied ERP for the S&P 500, January 2026 data update.
 # https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/
 EQUITY_RISK_PREMIUM = 0.0423
+
+# Used only when the live FRED fetch fails (see module docstring) - the
+# 10-year Treasury yield observed directly, multiple times, during this
+# feature's own development (2026-08-20), not a long-term reference
+# figure. Gets noticeably stale faster than ERP/beta above; a caller
+# relying on this fallback is told so via an explicit warning.
+FALLBACK_RISK_FREE_RATE = 0.047
 
 # Used only when a company's SIC code doesn't match any bucket below.
 # 1.0 is the CAPM-neutral "market average" beta, not a sourced Damodaran

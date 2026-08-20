@@ -8,6 +8,7 @@ from app.data.market_data import MarketDataError
 from app.qualitative.risk_extraction import QualitativeAnalysisError
 from app.services.analysis_service import analyze
 from app.valuation.assumptions import ValuationAssumptions
+from app.valuation.wacc import FALLBACK_RISK_FREE_RATE
 from tests.factories import (
     BANK_SUBMISSIONS,
     STANDARD_SUBMISSIONS,
@@ -310,7 +311,12 @@ def test_analyze_compute_wacc_without_client_raises(tmp_path):
         )
 
 
-def test_analyze_compute_wacc_degrades_to_warning_when_fetch_fails(tmp_path):
+def test_analyze_compute_wacc_falls_back_to_constant_rate_when_fetch_fails(tmp_path):
+    # FRED's live fetch has a confirmed real failure mode (reproducibly
+    # blocked from GitHub Actions' IP range - see wacc.py's module
+    # docstring) - the feature must not go dark over one unreachable data
+    # point, so this asserts the fallback constant keeps wacc_estimate
+    # usable, with a warning naming the degradation.
     def erroring_handler(request):
         raise httpx.ConnectError("boom", request=request)
 
@@ -327,8 +333,9 @@ def test_analyze_compute_wacc_degrades_to_warning_when_fetch_fails(tmp_path):
         market_data_client=broken_market_data_client,
     )
 
-    assert result.wacc_estimate is None
-    assert any("WACC estimate unavailable" in w for w in result.warnings)
+    assert result.wacc_estimate is not None
+    assert result.wacc_estimate.risk_free_rate == FALLBACK_RISK_FREE_RATE
+    assert any("risk-free rate unavailable" in w for w in result.warnings)
 
 
 def test_analyze_without_compute_comps_leaves_comps_estimate_none(tmp_path):

@@ -39,7 +39,7 @@ from app.valuation.comps import CompsEstimate, estimate_comps
 from app.valuation.dcf import UnsupportedValuationError
 from app.valuation.growth import FundamentalGrowthEstimate, estimate_fundamental_growth_rate
 from app.valuation.margin_of_safety import MarginOfSafetyResult, compute_margin_of_safety
-from app.valuation.wacc import WACCEstimate, estimate_wacc
+from app.valuation.wacc import FALLBACK_RISK_FREE_RATE, WACCEstimate, estimate_wacc
 
 # Not a numeric MOS adjustment - deliberately. There's no defensible formula
 # for "how many dollars of intrinsic value one high-severity qualitative risk
@@ -143,12 +143,20 @@ def analyze(
     if compute_wacc and statements:
         try:
             risk_free_rate = fetch_risk_free_rate(market_data_client)
-            latest_statement = max(statements, key=lambda s: s.period_end)
-            wacc_estimate = estimate_wacc(
-                latest_statement, market_price, risk_free_rate, assumptions.tax_rate
-            )
         except MarketDataError as exc:
-            warnings.append(f"WACC estimate unavailable: {exc}")
+            # FRED's live fetch has a confirmed real failure mode (see
+            # wacc.py's module docstring) - fall back to a dated constant
+            # with an explicit warning rather than losing the whole
+            # estimate over one unreachable data point.
+            risk_free_rate = FALLBACK_RISK_FREE_RATE
+            warnings.append(
+                f"risk-free rate unavailable ({exc}) - used a fallback constant "
+                f"({FALLBACK_RISK_FREE_RATE:.1%}, may be stale) for wacc_estimate"
+            )
+        latest_statement = max(statements, key=lambda s: s.period_end)
+        wacc_estimate = estimate_wacc(
+            latest_statement, market_price, risk_free_rate, assumptions.tax_rate
+        )
 
     comps_estimate = None
     if compute_comps and statements:
