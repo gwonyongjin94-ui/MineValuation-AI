@@ -108,6 +108,26 @@ live on CRCL (Circle Internet Group): `growth_rate=+27.7%` from
 explicit per-year warning in this case rather than reporting the
 number unqualified.
 
+**Near-zero-denominator trap: book equity crushed by buybacks/leverage
+inflates ROIC to an implausible magnitude.** A mature company that has
+spent years buying back stock (Home Depot) or is carrying heavy
+leverage against accumulated losses (Boeing) can end up with book
+`stockholders_equity` near zero - nothing wrong with the business, just
+its capital structure. ROIC's denominator (invested capital) then
+shrinks toward zero too, and `NOPAT / invested_capital` explodes: found
+live at `roic=144%` for HD and `roic=113%` for BA, both clearly
+unrealistic. `estimate_fundamental_growth_rate()` takes an optional
+`market_price` parameter; for the *latest* fiscal year only, invested
+capital is computed with market value of equity
+(`market_price * shares_outstanding` - the same market price
+`analyze()` already receives for margin_of_safety, not a new data
+source) instead of book equity, since a heavy-buyback company's market
+cap doesn't collapse just because its book equity did. Verified live:
+HD's ROIC dropped from 144% to 4.8%, BA's from 113% to 1.5%. Earlier
+fiscal years still use book equity (no historical price series is
+available to value them contemporaneously), so `suggested_growth_rate`
+(a 3-year average) only partly corrects for this - see LIMITATIONS.md.
+
 ## 2. DCF (`app/valuation/dcf.py`)
 
 ```

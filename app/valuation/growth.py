@@ -29,6 +29,20 @@ healthy growth but actually describes a company with a negative return
 on capital that is also shrinking its invested base. Flagged with an
 explicit warning rather than silently reported as a plain positive
 number.
+
+A related but different trap: book stockholders_equity can be crushed
+to near-zero (or negative) by years of share buybacks (HD) or
+accumulated losses plus leverage (BA), with nothing wrong with the
+business itself. Book-value ROIC then explodes to an implausible
+100%+ even though reinvestment_rate itself looks ordinary - found live
+on HD (roic=144%) and BA (roic=113%). For the most recent fiscal year
+only, invested capital is computed with the MARKET value of equity
+(market_price x shares_outstanding, passed in by the caller - the same
+market_price analyze() already takes for margin_of_safety, not a new
+data source) instead of book equity, which sidesteps this distortion:
+a heavy-buyback company's market cap doesn't collapse just because its
+book equity did. Earlier fiscal years still use book equity, since no
+historical price series is available to value them contemporaneously.
 """
 
 from datetime import date
@@ -64,10 +78,22 @@ def _value(fact: FinancialFact | None) -> float | None:
     return fact.value if fact is not None else None
 
 
-def _invested_capital(statement: FinancialStatement) -> tuple[float | None, list[str]]:
-    equity = _value(statement.stockholders_equity)
+def _invested_capital(
+    statement: FinancialStatement, market_equity: float | None = None
+) -> tuple[float | None, list[str]]:
     cash = _value(statement.cash)
     warnings: list[str] = []
+
+    if market_equity is not None:
+        equity = market_equity
+        warnings.append(
+            "invested capital uses market value of equity (market_price x "
+            "shares_outstanding), not book equity - avoids the near-zero-book-equity "
+            "distortion seen for heavy-buyback/highly-levered firms"
+        )
+    else:
+        equity = _value(statement.stockholders_equity)
+
     if equity is None or cash is None:
         return None, warnings
 
@@ -84,7 +110,9 @@ def _invested_capital(statement: FinancialStatement) -> tuple[float | None, list
 
 
 def _growth_year(
-    statement: FinancialStatement, fcff_result: FCFFResult | None
+    statement: FinancialStatement,
+    fcff_result: FCFFResult | None,
+    market_equity: float | None = None,
 ) -> FundamentalGrowthYear:
     warnings: list[str] = []
     reinvestment_rate = None
@@ -105,7 +133,7 @@ def _growth_year(
         net_capex = fcff_result.capex - fcff_result.depreciation_amortization
         reinvestment_rate = (net_capex + fcff_result.change_in_nwc) / fcff_result.nopat
 
-        invested_capital, ic_warnings = _invested_capital(statement)
+        invested_capital, ic_warnings = _invested_capital(statement, market_equity)
         warnings.extend(ic_warnings)
         if invested_capital is None:
             warnings.append("stockholders_equity/cash not found - cannot compute ROIC")
@@ -132,12 +160,21 @@ def _growth_year(
 
 
 def estimate_fundamental_growth_rate(
-    statements: list[FinancialStatement], tax_rate: float
+    statements: list[FinancialStatement], tax_rate: float, market_price: float | None = None
 ) -> FundamentalGrowthEstimate:
     ordered = sorted(statements, key=lambda s: s.period_end)
     fcff_by_period = {r.period_end: r for r in compute_fcff_series(ordered, tax_rate)}
 
-    by_year = [_growth_year(s, fcff_by_period.get(s.period_end)) for s in ordered]
+    by_year = []
+    for i, statement in enumerate(ordered):
+        market_equity = None
+        if market_price is not None and i == len(ordered) - 1:
+            shares_outstanding = _value(statement.shares_outstanding)
+            if shares_outstanding is not None:
+                market_equity = market_price * shares_outstanding
+        by_year.append(
+            _growth_year(statement, fcff_by_period.get(statement.period_end), market_equity)
+        )
 
     valid = [y.growth_rate for y in by_year if y.growth_rate is not None]
     warnings: list[str] = []

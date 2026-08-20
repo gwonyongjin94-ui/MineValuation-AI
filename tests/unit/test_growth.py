@@ -43,6 +43,7 @@ def _statement(
     short_term_debt=None,
     long_term_debt=None,
     stockholders_equity=None,
+    shares_outstanding=None,
 ) -> FinancialStatement:
     def maybe(metric, value):
         return _fact(metric, value, period_end, fiscal_year) if value is not None else None
@@ -60,6 +61,7 @@ def _statement(
         short_term_debt=maybe("short_term_debt", short_term_debt),
         long_term_debt=maybe("long_term_debt", long_term_debt),
         stockholders_equity=maybe("stockholders_equity", stockholders_equity),
+        shares_outstanding=maybe("shares_outstanding", shares_outstanding),
     )
 
 
@@ -171,6 +173,63 @@ def test_negative_reinvestment_and_roic_warns_about_misleading_positive_growth()
     assert any(
         "reinvestment_rate and ROIC are both negative" in w for w in year2_result.warnings
     )
+
+
+def test_market_value_equity_used_for_latest_year_when_book_equity_is_near_zero():
+    # Reproduces the real HD/BA case: book equity crushed near-zero by
+    # buybacks/leverage makes book-based ROIC explode to an implausible
+    # 1200%. Passing market_price swaps in market-value equity
+    # (price x shares_outstanding) for the LATEST year only.
+    year1 = _statement(
+        2023, "2023-12-31", operating_income=1000, depreciation_amortization=100, capex=150,
+        current_assets=500, current_liabilities=200, cash=50, short_term_debt=20,
+        long_term_debt=100, stockholders_equity=10,
+    )
+    year2 = _statement(
+        2024, "2024-12-31", operating_income=1200, depreciation_amortization=120, capex=180,
+        current_assets=600, current_liabilities=250, cash=80, short_term_debt=30,
+        long_term_debt=120, stockholders_equity=5, shares_outstanding=100,
+    )
+
+    without_price = estimate_fundamental_growth_rate([year1, year2], tax_rate=0.25)
+    year2_book = without_price.by_year[1]
+    # invested_capital = 30+120+5-80 = 75; roic = 900/75 = 12.0 (1200%) - the bug
+    assert year2_book.roic == pytest.approx(900 / 75)
+    assert year2_book.roic > 1.0
+
+    with_price = estimate_fundamental_growth_rate(
+        [year1, year2], tax_rate=0.25, market_price=50.0
+    )
+    year2_market = with_price.by_year[1]
+    # invested_capital = 30+120+(50*100)-80 = 5070; roic = 900/5070
+    assert year2_market.roic == pytest.approx(900 / 5070)
+    assert year2_market.roic < 1.0
+    assert any("market value of equity" in w for w in year2_market.warnings)
+
+    # earlier years are unaffected - still None either way (year1 has no
+    # prior-year NWC regardless of market_price)
+    assert with_price.by_year[0].growth_rate is None
+
+
+def test_market_price_ignored_when_shares_outstanding_missing():
+    year1 = _statement(
+        2023, "2023-12-31", operating_income=1000, depreciation_amortization=100, capex=150,
+        current_assets=500, current_liabilities=200, cash=50, short_term_debt=20,
+        long_term_debt=100, stockholders_equity=1000,
+    )
+    year2 = _statement(
+        2024, "2024-12-31", operating_income=1200, depreciation_amortization=120, capex=180,
+        current_assets=600, current_liabilities=250, cash=80, short_term_debt=30,
+        long_term_debt=120, stockholders_equity=1100,
+    )
+
+    result = estimate_fundamental_growth_rate([year1, year2], tax_rate=0.25, market_price=50.0)
+
+    # no shares_outstanding on year2 -> falls back to book equity:
+    # invested_capital = 30+120+1100-80 = 1170; roic = 900/1170
+    year2_result = result.by_year[1]
+    assert year2_result.roic == pytest.approx(900 / 1170)
+    assert not any("market value of equity" in w for w in year2_result.warnings)
 
 
 def test_negative_invested_capital_skips_roic():

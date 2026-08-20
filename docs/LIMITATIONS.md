@@ -103,14 +103,23 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   the required `fcff_growth_rate` input.** It inherits every limitation
   the FCFF calculation already has (EBIT approximated by operating
   income, non-cash NWC's short_term_debt-defaults-to-0 behavior) plus
-  two of its own: it's purely backward-looking (a company's historical
+  its own: it's purely backward-looking (a company's historical
   reinvestment/return pattern, not a forecast of what it will do), and
-  it needs `stockholders_equity` for ROIC's denominator - a tag that,
-  unlike `short_term_debt`, is not defaulted to a fallback value when
-  missing, so a company without it (e.g. a bank, or a period before
-  consistent XBRL tagging - see DATA_SPIKE_NOTES.md's AAPL FY2007-2009
-  observation) simply gets `growth_rate: null` for that year with a
-  warning, not an estimate.
+  a period before consistent XBRL tagging (see DATA_SPIKE_NOTES.md's
+  AAPL FY2007-2009 observation) simply gets `growth_rate: null` for
+  that year with a warning, not an estimate.
+- **The market-value-equity fix for ROIC's near-zero-book-equity trap
+  (see VALUATION_METHOD.md) only applies to the latest fiscal year.**
+  Earlier years in `fundamental_growth_estimate.by_year` still use book
+  `stockholders_equity`, since no historical price series is available
+  to value them contemporaneously - `analyze()` only ever receives one
+  market price, for "now." A company whose book equity has been near
+  zero for multiple years (HD, BA) will still show a distorted ROIC for
+  those older years, which drags down the 3-year-average
+  `suggested_growth_rate` even though the latest year alone is now
+  accurate. And if `shares_outstanding` is missing on the latest
+  statement, this falls back to book equity silently reusing the same
+  near-zero-denominator behavior it's meant to fix.
 - **Financial companies (banks, insurers - SIC 6000-6799) get no
   valuation at all**, not an adapted one. Damodaran's literature
   describes alternative approaches for these (e.g. treating regulatory

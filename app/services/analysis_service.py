@@ -113,7 +113,9 @@ def analyze(
     company = build_company_info(company_facts, submissions)
     statements = normalize(company_facts, submissions)
     metrics = compute_metrics(statements)
-    fundamental_growth_estimate = estimate_fundamental_growth_rate(statements, assumptions.tax_rate)
+    fundamental_growth_estimate = estimate_fundamental_growth_rate(
+        statements, assumptions.tax_rate, market_price=market_price
+    )
 
     warnings = [
         f"FY{statement.fiscal_year}: {warning}"
