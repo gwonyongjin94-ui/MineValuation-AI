@@ -1,4 +1,4 @@
-# SafetyMargin-AI
+# MineValuation-AI
 
 SEC EDGAR 공식 데이터를 수집해 재무 데이터를 표준화하고, FCFF/DCF 기반 내재가치와
 안전마진을 계산해 API로 반환하는 시스템. V2에서는 10-K 본문/사용자가 입력한

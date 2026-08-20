@@ -1,5 +1,5 @@
 [project]
-name = "safetymargin-ai"
+name = "minevaluation-ai"
 version = "0.1.0"
 description = "SEC EDGAR data -> normalized financials -> FCFF/DCF intrinsic value with margin of safety"
 requires-python = ">=3.11"
