@@ -6,7 +6,7 @@
 app/api/            HTTP boundary only - request/response models, status codes
 app/services/        orchestration - wires the layers below into one call
 app/data/            SEC access + raw-fact schema (FinancialFact, FinancialStatement);
-                      also market_data.py, the one non-SEC external client (FRED)
+                      also market_data.py, the non-SEC external clients (FRED, Yahoo Finance)
 app/financials/      raw facts -> normalized statement -> pure analysis metrics
 app/valuation/        FCFF -> DCF -> margin of safety
 app/qualitative/      V2: LLM risk extraction + FinBERT sentiment, from raw text
@@ -85,7 +85,7 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | Module | Responsibility | Does NOT do |
 |---|---|---|
 | `data/sec_client.py` | HTTP to SEC EDGAR, throttling, error mapping | Know what a "revenue" tag is |
-| `data/market_data.py` | HTTP to FRED for the risk-free rate (10Y Treasury) | Know anything about a specific company |
+| `data/market_data.py` | HTTP to FRED (risk-free rate) and Yahoo Finance (peer current price) | Know anything about SEC filings |
 | `data/ticker_map.py` | ticker -> CIK, cached locally | Know anything about financials |
 | `data/models.py` | Schema for a normalized fact/statement | Select which tag to use |
 | `financials/normalizer.py` | Pick the right XBRL fact per metric/period | Compute ratios or value anything |
@@ -94,6 +94,7 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | `valuation/fcff.py` | FCFF per statement, base-FCFF selection | Discount anything |
 | `valuation/growth.py` | Reference fundamental growth rate (reinvestment rate x ROIC) from a company's own data | Feed into or override `assumptions.fcff_growth_rate` |
 | `valuation/wacc.py` | Reference WACC estimate (bottom-up beta, synthetic-rating cost of debt, live risk-free rate) | Feed into or override `assumptions.discount_rate` |
+| `valuation/comps.py` | Reference comps estimate (peer trading multiples -> implied value) | Feed into or override `margin_of_safety` |
 | `valuation/dcf.py` | Project, discount, terminal value, sensitivity | Know about market price |
 | `valuation/margin_of_safety.py` | market price + as_of_date -> MOS range | Fetch market data |
 | `qualitative/risk_extraction.py` | Text -> structured qualitative risks (forced tool-use) | Fetch text, know its source |

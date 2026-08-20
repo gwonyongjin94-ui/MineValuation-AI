@@ -286,3 +286,31 @@ def test_analyze_endpoint_wacc_estimate_omitted_by_default(client):
 
     assert response.status_code == 200
     assert response.json()["wacc_estimate"] is None
+
+
+def test_analyze_endpoint_returns_comps_estimate_when_requested(client):
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "TSTX", "market_price": 50.0, "compute_comps": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    comps = body["comps_estimate"]
+    assert comps is not None
+    # STANDARD_SUBMISSIONS' SIC 3571 matches the "357" prefix bucket.
+    assert comps["industry_sic_prefix"] == "357"
+    # The test fixture's ticker_map only resolves TSTX, so every curated
+    # peer (AAPL/DELL/HPQ/NTAP) fails to resolve and is skipped - a real
+    # exercise of the per-peer resilience path, not a crash.
+    assert comps["peers"] == []
+    assert len(comps["warnings"]) > 0
+
+
+def test_analyze_endpoint_comps_estimate_omitted_by_default(client):
+    response = client.post(
+        "/api/v1/analyze", json={"ticker": "TSTX", "market_price": 50.0}
+    )
+
+    assert response.status_code == 200
+    assert response.json()["comps_estimate"] is None

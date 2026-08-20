@@ -268,11 +268,14 @@ as_of_date)`:
 A non-positive intrinsic value produces `margin_of_safety: null`
 rather than a nonsensical or divide-by-zero result.
 
-**Market price is a request input, not fetched.** V1 deliberately does
-not integrate a market-data provider - keeping "what the market says"
-separate from "what SEC filings say" is what let this project isolate
-SEC-layer bugs from valuation-layer bugs during development, and there
-is no reason to lose that separation now.
+**The target company's own market price is always a request input, never
+fetched.** Keeping "what the market says about this company" separate
+from "what SEC filings say" is what let this project isolate SEC-layer
+bugs from valuation-layer bugs during development, and there's no
+reason to lose that separation for the number margin_of_safety is
+actually computed against - even though other companies' prices (comps
+peers, below) and a Treasury yield (wacc_estimate) are now fetched for
+reference-only estimates elsewhere in the response.
 
 ## 4. Qualitative risk and sentiment (V2) - never merged into MOS numerically
 
@@ -311,7 +314,56 @@ section for how these map onto the human-in-the-loop checks described
 in the AI-Assisted Value Investing paper (Caridi et al., Electronics
 2026), and LIMITATIONS.md for what those checks do not cover.
 
-## Defaults at the API boundary
+## 5. Comps (reference only, `app/valuation/comps.py`)
+
+```
+EV       = market_price * shares_outstanding + debt - cash    (per company)
+EBITDA   = operating_income + depreciation_amortization        (a proxy)
+
+peer EV/EBITDA, EV/Revenue, P/E -> median across a curated peer group
+implied value/share = (peer median multiple * target's own metric
+                        - target's debt + target's cash) / target's shares
+```
+
+The other leg of the "several methods, one football-field range" toolkit
+real institutions use alongside DCF (see the JPM/BlackRock/Buffett
+discussion this feature came out of) - relative valuation (what similar
+companies currently trade at) instead of absolute valuation (what this
+company's own cash flows are worth, discounted). Same reference-only
+status as `fundamental_growth_estimate`/`wacc_estimate`: `analyze()`
+returns this as `comps_estimate` alongside `margin_of_safety`, opt-in
+via `compute_comps`, never merged into it.
+
+**Peer lists are curated, documented constants, not a live SEC
+discovery query.** SEC's own browse-edgar SIC-search endpoint was tried
+and rejected: its XML output has a long-standing serialization bug
+where the company name comes back literally as `"ARRAY(0x...)"` instead
+of a string, and matches carry no size/relevance ranking - the first N
+results for a SIC code are alphabetical noise (a shell company as often
+as a real peer), and ranking candidates by size would mean fetching
+every one's market cap before filtering, which doesn't fit a single
+request's latency budget. Same tradeoff already made for `wacc.py`'s
+industry beta table (see that module's docstring) - `comps.py` reuses
+the identical SIC-prefix-matching convention, on purpose, as a parallel
+structure.
+
+**A peer group can be thin - the median is still computed, never
+withheld, but flagged.** Some curated buckets have as few as one peer
+(e.g. HD's only listed peer is LOW); `MIN_PEERS_FOR_MEDIAN`-style
+silent suppression was tried first and rejected after it produced
+`null` implied values that looked like a bug rather than "there's only
+one comparable company" - same "compute it, but warn" principle as
+`select_base_fcff()` averaging over fewer years than requested.
+`peers` skipped because a ticker doesn't resolve, has no shares
+outstanding, or Yahoo Finance has no price for it are named individually
+in `warnings`, not silently dropped.
+
+Peer prices come from `app/data/market_data.py`'s `fetch_current_price()`
+- the same Yahoo Finance chart API endpoint used to build the
+30-DJIA-constituent reference spreadsheet before this feature existed,
+now formalized into the app. Unofficial/undocumented, no API key - see
+that function's docstring for the reliability caveat this carries that
+FRED and SEC EDGAR do not.
 
 `app/api/analysis.py` defines `DEFAULT_ASSUMPTIONS` (5% FCFF growth,
 9% discount rate, 2.5% terminal growth, 21% tax rate, 5-year forecast,

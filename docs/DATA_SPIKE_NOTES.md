@@ -377,3 +377,38 @@ ROIC 분모(투하자본)가 작아지면서 비율이 폭주함 — CRCL의 "�
 | NVDA | Semiconductor | 11.01% | 업종 베타 1.49로 가장 높음 |
 | BA | Aerospace/Defense | 8.33% | B2/B 등급(정크본드급)인데도 업종베타(0.85)가 낮아서 WACC 자체는 낮게 나옴 — 보잉 고유 리스크(737 MAX 사태)는 업종평균 베타로는 못 잡는다는 한계를 그대로 보여주는 사례 |
 | JPM | Banks (Regional) | 계산 안 됨 | 은행이라 operating_income/interest_expense 자체가 우리 태그로 안 잡힘(finding #6과 동일 이유) |
+
+## V5 — Comps(비교기업 배수) 추가: SEC 자체 업종검색 API가 못 쓸 수준이었다
+
+JPM/BlackRock/버핏이 회사를 어떻게 밸류에이션하는지 설명하다가, "우리는
+DCF 하나만 하고 상대가치(comps)는 아예 없다"는 게 나와서 `app/valuation/comps.py`를
+추가했다. Peer 기업을 어떻게 찾을지가 핵심 문제였다.
+
+**SEC의 `browse-edgar` SIC 검색 API를 먼저 시도했다가 버렸다.**
+`https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&SIC=7372&...&output=atom`로
+실제 호출해보니:
+- 응답 XML의 회사명 필드가 **`title="ARRAY(0x55c3e678d318)"`처럼 아예 깨져서
+  나온다** — SEC 레거시 CGI 백엔드의 배열 직렬화 버그로 보임. CIK는 정상 추출
+  가능하지만 이름은 못 씀.
+- 결과가 **크기/관련도순이 아니라 그냥 알파벳순**이라, count=40으로 받아도
+  대형주 몇 개 옆에 껍데기 회사들이 무작위로 섞여 나온다. "진짜 비교 가능한
+  peer"를 걸러내려면 후보 전부의 시가총액을 먼저 조회해야 하는데, 그러면
+  요청 하나에 SEC 호출 수십~백 번 — 응답시간이 감당 안 됨.
+
+→ **결정**: `wacc.py`의 업종베타 테이블과 똑같은 방식으로, SIC 접두사별
+대형 상장사 peer 목록을 직접 큐레이션해서 상수로 박아뒀다(`INDUSTRY_PEERS`).
+실시간 검색이 아니라 문서화된 참고자료 취급 — 이미 베타 테이블에서 받아들인
+트레이드오프를 그대로 재사용한 것.
+
+**Peer가 1개뿐인 업종에서 median이 통째로 비어버리는 버그를 실데이터로 잡았다.**
+HD(Retail Building Supply) peer 목록이 LOW 하나뿐인데, 처음 코드는
+"최소 2개 peer 있어야 median 계산"으로 짜서 HD를 돌리면 `implied_value_per_share`가
+전부 `null`로 나왔다 — 버그처럼 보이는 결과. 실제로는 데이터가 없는 게
+아니라 peer가 1개뿐이라 통계적으로 약할 뿐이라, "무조건 계산은 하되
+peer 수가 적으면 경고"로 바꿨다(`select_base_fcff()`의 "부족해도 평균 내고
+경고" 패턴과 동일).
+
+**실데이터 검증(NVDA, peer 5개: AVGO/QCOM/TXN/AMD/INTC)**: EV/EBITDA 배수
+기준 내재가치 $338.5, EV/Revenue 기준 $139.1, P/E 기준 $510.7 — 세 방법이
+서로 크게 갈린다(반도체 업종 자체가 워낙 다양해서). 이것도 "하나의 숫자"로
+합치지 않고 세 배수 결과를 전부 그대로 노출한다.

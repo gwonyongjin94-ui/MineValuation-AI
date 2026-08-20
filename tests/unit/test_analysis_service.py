@@ -329,3 +329,52 @@ def test_analyze_compute_wacc_degrades_to_warning_when_fetch_fails(tmp_path):
 
     assert result.wacc_estimate is None
     assert any("WACC estimate unavailable" in w for w in result.warnings)
+
+
+def test_analyze_without_compute_comps_leaves_comps_estimate_none(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+    )
+
+    assert result.comps_estimate is None
+
+
+def test_analyze_compute_comps_produces_estimate_with_unresolvable_peers(tmp_path):
+    # STANDARD_SUBMISSIONS' SIC 3571 matches comps.py's "357" bucket
+    # (AAPL/DELL/HPQ/NTAP), none of which this test's ticker_map can
+    # resolve - every peer is skipped, not a crash, and that's exactly
+    # what's asserted here (the full peer-computation path is covered by
+    # tests/unit/test_comps.py).
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        compute_comps=True,
+        market_data_client=build_mock_market_data_client(4.50),
+    )
+
+    comps = result.comps_estimate
+    assert comps is not None
+    assert comps.industry_sic_prefix == "357"
+    assert comps.peers == []
+
+
+def test_analyze_compute_comps_without_client_raises(tmp_path):
+    with pytest.raises(MarketDataError):
+        analyze(
+            ticker="TSTX",
+            market_price=50.0,
+            as_of_date=date(2026, 1, 1),
+            assumptions=_assumptions(),
+            client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+            ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+            compute_comps=True,
+        )

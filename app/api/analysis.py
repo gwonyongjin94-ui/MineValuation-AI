@@ -18,6 +18,7 @@ from app.qualitative.sentiment import SentimentSummary
 from app.qualitative.sentiment import is_available as sentiment_is_available
 from app.services.analysis_service import analyze
 from app.valuation.assumptions import BaseFCFMethod, ValuationAssumptions
+from app.valuation.comps import CompsEstimate
 from app.valuation.growth import FundamentalGrowthEstimate
 from app.valuation.margin_of_safety import MarginOfSafetyResult
 from app.valuation.wacc import WACCEstimate
@@ -127,6 +128,14 @@ class AnalyzeRequest(BaseModel):
     # fundamental_growth_estimate, this is a reference figure only: it is
     # never substituted for assumptions.discount_rate.
     compute_wacc: bool = False
+    # Comparable-company analysis: peer trading multiples (EV/EBITDA,
+    # EV/Revenue, P/E) from a curated per-industry peer list (same
+    # SIC-bucket approach as compute_wacc's beta table - see
+    # app/valuation/comps.py), applied to this company's own metrics.
+    # Adds one request per peer to both SEC EDGAR and Yahoo Finance, so
+    # opt-in - and, like fundamental_growth_estimate/wacc_estimate, this
+    # is a reference figure only, never merged into margin_of_safety.
+    compute_comps: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -137,6 +146,7 @@ class AnalyzeResponse(BaseModel):
     unsupported_reason: str | None
     fundamental_growth_estimate: FundamentalGrowthEstimate
     wacc_estimate: WACCEstimate | None
+    comps_estimate: CompsEstimate | None
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     assumptions: ValuationAssumptions
@@ -204,6 +214,7 @@ def analyze_ticker(
             sentiment_classifier=sentiment_classifier,
             cross_validate=request.cross_validate,
             compute_wacc=request.compute_wacc,
+            compute_comps=request.compute_comps,
             market_data_client=market_data_client,
         )
     except SECClientError as exc:
@@ -221,6 +232,7 @@ def analyze_ticker(
         unsupported_reason=result.unsupported_reason,
         fundamental_growth_estimate=result.fundamental_growth_estimate,
         wacc_estimate=result.wacc_estimate,
+        comps_estimate=result.comps_estimate,
         qualitative_analyses=result.qualitative_analyses,
         sentiment_analyses=result.sentiment_analyses,
         assumptions=assumptions,

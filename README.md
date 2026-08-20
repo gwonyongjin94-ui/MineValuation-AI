@@ -113,11 +113,29 @@ curl -X POST localhost:8000/api/v1/analyze \
 (SIC 코드 기반) + 실시간으로 가져온 10년 국채금리(FRED) + 이자보상배율 기반
 신용등급으로 계산한 회사별 WACC 참고치. `fundamental_growth_estimate`와
 같은 원칙으로, `assumptions.discount_rate`(모든 종목에 동일 적용되는 값)를
-절대 대체하지 않고 옆에만 표시된다. 이 프로젝트에서 SEC EDGAR가 아닌 외부
-데이터(FRED 무위험금리)를 실제로 가져오는 유일한 부분 - 베타/ERP 테이블은
-Damodaran이 공개한 데이터를 문서화된 상수로 박아둔 거라 실시간은 아님.
-한계는 [LIMITATIONS.md](docs/LIMITATIONS.md), 계산식은
+절대 대체하지 않고 옆에만 표시된다. 베타/ERP 테이블은 Damodaran이 공개한
+데이터를 문서화된 상수로 박아둔 거라 실시간은 아니고, 무위험금리(FRED)만
+실제로 매번 가져옴. 한계는 [LIMITATIONS.md](docs/LIMITATIONS.md), 계산식은
 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md) 참고.
+
+### Comps(비교기업 배수) 참고 추정치
+
+```bash
+curl -X POST localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "AAPL", "market_price": 230, "compute_comps": true}'
+```
+`compute_comps: true`면 응답에 `comps_estimate`가 추가된다 - JPM이 실제로 쓰는
+방법론 중 DCF 말고 다른 한 축(상대가치). 같은 업종(SIC 기반, 큐레이션된
+peer 리스트) 대형주들의 EV/EBITDA·EV/Revenue·P/E 중앙값을 이 회사 자체
+지표에 적용해서 "비슷한 회사들 배수로 치면 얼마"를 계산한다. peer 가격은
+Yahoo Finance에서 실시간으로 가져옴 - 비공식 API라 SEC/FRED보다 안정성
+보장이 약하다는 점은 감안. 역시 `margin_of_safety`를 절대 대체하지 않고
+옆에만 표시됨. peer가 하나뿐인 업종도 있어서(예: HD의 유일한 peer는
+Lowe's) 그런 경우 "low-confidence sample" 경고가 붙는다 - 계산 자체는
+숨기지 않고 항상 보여줌. 한계는 [LIMITATIONS.md](docs/LIMITATIONS.md)의
+"Comps layer", 계산식은 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)의
+"5. Comps" 참고.
 
 ## 테스트
 

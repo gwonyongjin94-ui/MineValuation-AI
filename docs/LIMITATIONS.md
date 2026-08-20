@@ -5,13 +5,16 @@ as a starting point for analysis, not a verdict. Grouped by layer.
 
 ## Data layer
 
-- **SEC EDGAR is the only data source for every company-specific
+- **SEC EDGAR is the only data source for every company *financial*
   fact.** No cross-validation against another provider - if SEC's own
   XBRL tagging is wrong for a company, this system reproduces that
-  error. (The one exception: `compute_wacc`'s risk-free rate comes from
-  FRED, a macro/government figure with no company-specific counterpart
-  in SEC filings by definition - see VALUATION_METHOD.md's WACC
-  subsection.)
+  error. Two reference-only estimates reach outside SEC EDGAR for
+  non-financial-statement data: `compute_wacc`'s risk-free rate (FRED -
+  a macro/government figure with no company-specific counterpart in SEC
+  filings by definition) and `compute_comps`'s peer current prices
+  (Yahoo Finance - a live trading price, likewise not something a
+  filing reports). Neither ever touches `margin_of_safety` itself - see
+  VALUATION_METHOD.md's WACC and Comps sections.
 - **Custom-taxonomy XBRL is not parsed.** `companyfacts` only
   aggregates standard taxonomies (`us-gaap`, `dei`, `ifrs-full`,
   `srt`). If a company reports an important figure only under a
@@ -168,12 +171,48 @@ as a starting point for analysis, not a verdict. Grouped by layer.
 
 ## Margin-of-safety layer
 
-- **Market price is a request input, not fetched from any market-data
-  provider.** There is no live-quote integration in V1.
+- **The target company's market price is a request input, never
+  fetched.** `margin_of_safety` is always computed against whatever
+  price the caller supplies - there is no live-quote integration for
+  the company actually being valued (`comps_estimate`'s peer prices and
+  `wacc_estimate`'s risk-free rate are fetched live, but only for those
+  two reference-only estimates, never for `margin_of_safety` itself).
 - **Look-ahead-bias filtering by `filed_date` is implemented but not
   backtested.** It has not been validated against a known historical
   scenario to confirm point-in-time results match what a real investor
   would have seen.
+
+## Comps layer (reference only)
+
+- **Peer lists are curated, hardcoded, and thin.** `INDUSTRY_PEERS` in
+  `comps.py` covers ~30 SIC-prefix buckets with 2-6 large-cap peers
+  each, not an exhaustive industry crosswalk - a company whose SIC
+  doesn't match any bucket gets `peers: []` and an explicit warning, not
+  a fallback peer group. Several buckets have only one or two peers
+  (e.g. HD's only listed peer is Lowe's), so a computed median can rest
+  on a single data point - flagged with a "low-confidence sample"
+  warning, but not withheld.
+- **Peers are not filtered by size, growth, or margin profile** - only
+  by SIC-prefix bucket membership. A capital-light software peer and a
+  hardware-heavy one can land in the same bucket with very different
+  "normal" EV/Revenue multiples, and the median doesn't know the
+  difference.
+- **EBITDA is a proxy** (`operating_income + depreciation_amortization`),
+  the same simplification and caveats as the EBIT proxy discussed under
+  FCFF above - no adjustment for non-operating items inside
+  `operating_income`.
+- **Peer current price comes from an unofficial, undocumented API**
+  (Yahoo Finance's chart endpoint, via
+  `app/data/market_data.py::fetch_current_price()`) with no uptime or
+  format-stability guarantee, unlike FRED (wacc_estimate) or SEC EDGAR
+  (everything else in this app). A peer whose price can't be fetched is
+  skipped with a named warning, not silently dropped, but the whole
+  feature depends on this one non-guaranteed endpoint staying up.
+- **No control-premium or minority-discount adjustment** - peer trading
+  multiples reflect minority-stake, liquid-market prices; applying them
+  to imply a value has the same limitation any comps analysis does
+  (distinct from a precedent-transactions approach, which isn't
+  implemented at all here).
 
 ## Qualitative layer (V2)
 

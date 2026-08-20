@@ -66,3 +66,21 @@ def test_analyze_compute_wacc_real_data():
     assert wacc["cost_of_equity"] is not None
     # assumptions.discount_rate is never overwritten by the estimate.
     assert body["assumptions"]["discount_rate"] == 0.09
+
+
+def test_analyze_compute_comps_real_data():
+    # Hits real SEC EDGAR (target + curated peers) and real Yahoo Finance
+    # (peer prices) - same "always-on in CI" tier as the other real-data
+    # tests in this file.
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "NVDA", "market_price": 217.56, "compute_comps": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    comps = body["comps_estimate"]
+    assert comps is not None
+    assert comps["industry_sic_prefix"] == "3674"
+    assert len(comps["peers"]) > 1
+    assert comps["median_ev_to_ebitda"] is not None

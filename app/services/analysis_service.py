@@ -1,9 +1,11 @@
 """Wires SEC client -> normalizer -> metrics -> DCF -> margin of safety,
 plus optional qualitative risk extraction (10-K text and/or a
 user-pasted earnings call transcript), optional FinBERT sentiment
-scoring of that same text, and an optional WACC estimate from real
-market data (app/valuation/wacc.py). Growth-rate and WACC estimates are
-both reference figures only - never substituted into `assumptions`.
+scoring of that same text, an optional WACC estimate from real market
+data (app/valuation/wacc.py), and an optional comparable-company
+analysis (app/valuation/comps.py). All three estimates (growth, WACC,
+comps) are reference figures only - never substituted into
+`assumptions` or `margin_of_safety`.
 
 Transport-agnostic on purpose: it raises the data-layer (SECClientError,
 UnknownTickerError), valuation-layer (UnsupportedValuationError), and
@@ -33,6 +35,7 @@ from app.qualitative.risk_extraction import (
 )
 from app.qualitative.sentiment import SentimentSummary, score_sentiment
 from app.valuation.assumptions import ValuationAssumptions
+from app.valuation.comps import CompsEstimate, estimate_comps
 from app.valuation.dcf import UnsupportedValuationError
 from app.valuation.growth import FundamentalGrowthEstimate, estimate_fundamental_growth_rate
 from app.valuation.margin_of_safety import MarginOfSafetyResult, compute_margin_of_safety
@@ -56,6 +59,7 @@ class AnalysisResult(BaseModel):
     unsupported_reason: str | None
     fundamental_growth_estimate: FundamentalGrowthEstimate
     wacc_estimate: WACCEstimate | None
+    comps_estimate: CompsEstimate | None
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
     sources: list[str]
@@ -106,14 +110,17 @@ def analyze(
     sentiment_classifier=None,
     cross_validate: bool = False,
     compute_wacc: bool = False,
+    compute_comps: bool = False,
     market_data_client=None,
 ) -> AnalysisResult:
     if (analyze_10k or earnings_call_text) and anthropic_client is None:
         raise QualitativeAnalysisError(
             "qualitative analysis requested but no Anthropic client configured"
         )
-    if compute_wacc and market_data_client is None:
-        raise MarketDataError("compute_wacc requested but no market data client configured")
+    if (compute_wacc or compute_comps) and market_data_client is None:
+        raise MarketDataError(
+            "compute_wacc/compute_comps requested but no market data client configured"
+        )
 
     cik = ticker_map.resolve(ticker)
     submissions = client.get_submissions(cik)
@@ -142,6 +149,16 @@ def analyze(
             )
         except MarketDataError as exc:
             warnings.append(f"WACC estimate unavailable: {exc}")
+
+    comps_estimate = None
+    if compute_comps and statements:
+        try:
+            latest_statement = max(statements, key=lambda s: s.period_end)
+            comps_estimate = estimate_comps(
+                ticker, latest_statement, client, ticker_map, market_data_client
+            )
+        except MarketDataError as exc:
+            warnings.append(f"comps estimate unavailable: {exc}")
 
     margin_of_safety = None
     unsupported_reason = None
@@ -214,6 +231,7 @@ def analyze(
         unsupported_reason=unsupported_reason,
         fundamental_growth_estimate=fundamental_growth_estimate,
         wacc_estimate=wacc_estimate,
+        comps_estimate=comps_estimate,
         qualitative_analyses=qualitative_analyses,
         sentiment_analyses=sentiment_analyses,
         sources=sources,

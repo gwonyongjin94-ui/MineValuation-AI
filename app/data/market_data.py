@@ -1,15 +1,14 @@
-"""Risk-free rate from FRED (DGS10, 10-Year Treasury Constant Maturity) -
-the one genuinely external, non-SEC, live-fetched data source in this
-app. Needed by app/valuation/wacc.py for cost-of-equity/cost-of-debt
-estimates - CAPM's risk-free rate isn't derivable from any single
-company's own SEC filings by definition (it's a government bond yield,
-not a fact about the company). No API key required: FRED serves this
-series as a plain CSV.
+"""External (non-SEC) market data: the risk-free rate from FRED
+(app/valuation/wacc.py) and peer current prices for comps
+(app/valuation/comps.py) - the only two things this app needs that
+cannot come from a company's own SEC filings by definition (a Treasury
+yield and another company's live trading price).
 """
 
 import httpx
 
 DGS10_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"
+YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 
 
 class MarketDataError(Exception):
@@ -46,5 +45,33 @@ def fetch_risk_free_rate(client: httpx.Client) -> float:
     raise MarketDataError("FRED returned no usable 10-year Treasury observation")
 
 
+def fetch_current_price(ticker: str, client: httpx.Client) -> float:
+    """Latest traded price for `ticker`, via Yahoo Finance's chart API.
+
+    Unofficial/undocumented endpoint (no API key, no official terms of
+    use) - verified live and stable through this project's development
+    (used for the 30-DJIA-constituent reference spreadsheet before this
+    module existed), but flagged here as the one dependency with no
+    guaranteed uptime/format contract, unlike FRED or SEC EDGAR.
+    """
+    url = YAHOO_CHART_URL.format(ticker=ticker.upper())
+    try:
+        response = client.get(url, params={"range": "5d", "interval": "1d"})
+    except httpx.RequestError as exc:
+        raise MarketDataError(f"failed to reach Yahoo Finance for {ticker}: {exc}") from exc
+    if response.status_code >= 400:
+        raise MarketDataError(f"Yahoo Finance returned HTTP {response.status_code} for {ticker}")
+
+    try:
+        data = response.json()
+        price = data["chart"]["result"][0]["meta"]["regularMarketPrice"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise MarketDataError(f"could not parse Yahoo Finance response for {ticker}") from exc
+
+    if not isinstance(price, int | float):
+        raise MarketDataError(f"Yahoo Finance returned no usable price for {ticker}")
+    return float(price)
+
+
 def build_default_market_data_client() -> httpx.Client:
-    return httpx.Client(timeout=10.0)
+    return httpx.Client(timeout=10.0, headers={"User-Agent": "Mozilla/5.0"})
