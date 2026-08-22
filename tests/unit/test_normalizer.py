@@ -1,3 +1,5 @@
+import pytest
+
 from app.data.models import ValuationCategory
 from app.financials.normalizer import classify_company, normalize
 
@@ -601,3 +603,146 @@ def test_operating_income_derivation_not_attempted_when_directly_tagged():
 
     assert statement.operating_income.value == 20000000000
     assert statement.operating_income.xbrl_tag == "OperatingIncomeLoss"
+
+
+def _facts_with_shares(usd_tags: dict, shares_tags: dict) -> dict:
+    usd = _facts(usd_tags, unit="USD")["facts"]["us-gaap"]
+    shares = _facts(shares_tags, unit="shares")["facts"]["us-gaap"]
+    return {"facts": {"us-gaap": {**usd, **shares}}}
+
+
+def test_shares_outstanding_falls_back_to_weighted_average_diluted_reproduces_nke_case():
+    # Nike never tags CommonStockSharesOutstanding at all (checked live) -
+    # only its weighted-average diluted share count, at a normal
+    # DJIA-scale raw magnitude (~1.48B), which needs no scale correction.
+    company_facts = {
+        "cik": 5,
+        "entityName": "NKE-like",
+        **_facts_with_shares(
+            {
+                "Revenues": [
+                    _entry(46398000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(3108000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+            },
+            {
+                "WeightedAverageNumberOfDilutedSharesOutstanding": [
+                    _entry(1481000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+            },
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.shares_outstanding.value == 1481000000
+    assert statement.shares_outstanding.xbrl_tag == "WeightedAverageNumberOfDilutedSharesOutstanding"
+    assert any("derived from" in w for w in statement.warnings)
+    assert not any("assumed reported in millions" in w for w in statement.warnings)
+
+
+def test_shares_outstanding_falls_back_to_basic_when_diluted_absent():
+    company_facts = {
+        "cik": 6,
+        "entityName": "MRK-like",
+        **_facts_with_shares(
+            {
+                "Revenues": [
+                    _entry(64000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(21000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            },
+            {
+                "WeightedAverageNumberOfSharesOutstandingBasic": [
+                    _entry(2502000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            },
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.shares_outstanding.value == 2502000000
+    assert statement.shares_outstanding.xbrl_tag == "WeightedAverageNumberOfSharesOutstandingBasic"
+
+
+def test_shares_outstanding_scale_corrected_when_reported_in_millions_reproduces_mcd_case():
+    # McDonald's real FY2025 10-K income statement is headed "In millions"
+    # and literally prints "Weighted-average shares outstanding-diluted
+    # 716.4" (net_income $8,563M / 716,400,000 shares = $11.95/share,
+    # exactly its real reported diluted EPS) - not a filer tagging error,
+    # a real presentation choice this normalizer must detect and undo.
+    company_facts = {
+        "cik": 7,
+        "entityName": "MCD-like",
+        **_facts_with_shares(
+            {
+                "Revenues": [
+                    _entry(25923000000, "2025-12-31", fy=2025, filed="2026-02-24",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(8563000000, "2025-12-31", fy=2025, filed="2026-02-24",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            },
+            {
+                "WeightedAverageNumberOfDilutedSharesOutstanding": [
+                    _entry(716.4, "2025-12-31", fy=2025, filed="2026-02-24",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            },
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.shares_outstanding.value == 716400000.0
+    assert statement.net_income.value / statement.shares_outstanding.value == pytest.approx(
+        11.95, abs=0.01
+    )
+    assert any("assumed reported in millions" in w for w in statement.warnings)
+
+
+def test_shares_outstanding_prefers_point_in_time_tag_over_weighted_average():
+    company_facts = {
+        "cik": 8,
+        "entityName": "HD-like-shares",
+        **_facts_with_shares(
+            {
+                "Revenues": [
+                    _entry(100000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(15000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "CommonStockSharesOutstanding": [
+                    _entry(1000000000, "2025-12-31", fy=2025, filed="2026-02-01", accn="A-2025"),
+                ],
+            },
+            {
+                "WeightedAverageNumberOfDilutedSharesOutstanding": [
+                    _entry(999000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            },
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.shares_outstanding.value == 1000000000
+    assert statement.shares_outstanding.xbrl_tag == "CommonStockSharesOutstanding"
+    assert not any("derived from" in w for w in statement.warnings)

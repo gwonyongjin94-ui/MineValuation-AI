@@ -150,6 +150,37 @@ OPERATING_INCOME_PRETAX_TAGS = (
 OPERATING_INCOME_INTEREST_TAG = "InterestIncomeExpenseNonoperatingNet"
 OPERATING_INCOME_OTHER_TAG = "OtherNonoperatingIncomeExpense"
 
+# shares_outstanding fallback: checked live that several DJIA-scale
+# companies never tag CommonStockSharesOutstanding at all (NKE, MRK, CVX,
+# KO, JNJ, PG), and WMT tagged it only through its FY2011 10-K, then
+# stopped reporting a point-in-time share count under any us-gaap concept
+# from FY2012 onward - a discontinuation, not a rename to some other tag.
+# All of them do reliably tag the weighted-average share count used for
+# EPS instead, which real analysts commonly substitute for a point-in-time
+# count in a per-share DCF when nothing better is tagged. It's a duration
+# concept (spans the fiscal year, like DURATION_METRICS), not an instant
+# one, and it's an average, not a balance-sheet-date snapshot - both
+# always flagged via warning, never silently swapped in.
+SHARES_OUTSTANDING_FALLBACK_TAGS = (
+    "WeightedAverageNumberOfDilutedSharesOutstanding",
+    "WeightedAverageNumberOfSharesOutstandingBasic",
+)
+
+# Checked live against McDonald's real FY2025 10-K: its income statement
+# is headed "In millions" and literally prints "Weighted-average shares
+# outstanding-basic 713.4" (real count ~713,400,000) - the XBRL tag
+# faithfully reproduces that scale, it isn't a filer tagging error. SEC's
+# companyconcept/companyfacts API doesn't expose the XBRL `decimals`
+# attribute that would otherwise signal this structurally, so there's no
+# clean way to detect it - this magnitude threshold is a heuristic
+# instead: no company at the scale this project targets (DJIA
+# constituents and similar large caps) has fewer than 10 million shares
+# outstanding, so a value under it is assumed to be reported in millions
+# and scaled back up x1,000,000, always with an explicit warning either
+# way (including when the value is used as-is, in case a company this
+# small a heuristic wasn't built for shows up later).
+SHARES_OUTSTANDING_SCALE_THRESHOLD = 10_000_000
+
 _FINANCIAL_SIC_RANGE = range(6000, 6800)
 
 
@@ -336,6 +367,43 @@ def _derive_operating_income(
     return derived_fact, pretax_restated, [warning]
 
 
+def _select_shares_outstanding(
+    facts_ns: dict, period_end: date
+) -> tuple[FinancialFact | None, list[FinancialFact], list[str]]:
+    fact, restated = _select_fact(facts_ns, "shares_outstanding", period_end)
+    if fact is not None:
+        return fact, restated, []
+
+    taxonomy = "us-gaap"
+    matches = _collect_matches(
+        facts_ns, taxonomy, list(SHARES_OUTSTANDING_FALLBACK_TAGS), period_end, is_duration=True
+    )
+    fact, restated = _resolve_matches(matches, "shares_outstanding", taxonomy)
+    if fact is None:
+        return None, [], []
+
+    warnings = [
+        (
+            f"shares_outstanding derived from {fact.xbrl_tag} (a weighted average over the "
+            "fiscal year, not a balance-sheet-date count) - this company doesn't tag a "
+            "point-in-time CommonStockSharesOutstanding for this period."
+        )
+    ]
+    if abs(fact.value) < SHARES_OUTSTANDING_SCALE_THRESHOLD:
+        scaled_value = fact.value * 1_000_000
+        warnings.append(
+            f"{fact.xbrl_tag} value ({fact.value:,.1f}) is below "
+            f"{SHARES_OUTSTANDING_SCALE_THRESHOLD:,.0f} - assumed reported in millions "
+            "(verified real case: McDonald's own 10-K prints its whole income statement, "
+            "share count included, 'in millions') and scaled x1,000,000. Not verified for "
+            "this specific company's filing - if it genuinely has this few shares "
+            "outstanding, this scaling is wrong."
+        )
+        fact = fact.model_copy(update={"value": scaled_value})
+
+    return fact, restated, warnings
+
+
 def _to_fact(metric: str, taxonomy: str, tag: str, unit: str, entry: dict) -> FinancialFact:
     return FinancialFact(
         metric=metric,
@@ -362,6 +430,9 @@ def _build_statement(company: CompanyInfo, facts_ns: dict, period_end: date) -> 
     for metric in CONCEPT_CANDIDATES:
         if metric == "short_term_debt":
             fact, restated = _select_short_term_debt(facts_ns, period_end)
+        elif metric == "shares_outstanding":
+            fact, restated, share_warnings = _select_shares_outstanding(facts_ns, period_end)
+            warnings.extend(share_warnings)
         else:
             fact, restated = _select_fact(facts_ns, metric, period_end)
         if (

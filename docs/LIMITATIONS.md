@@ -36,8 +36,8 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   result.
 - **Whether `depreciation_amortization` and `cash`'s fallback
   candidates measure the same thing is not fully verified**, unlike
-  `short_term_debt` (fixed - see below) and `long_term_debt`/
-  `shares_outstanding` (confirmed single-tag). AAPL reports
+  `short_term_debt` (fixed - see below) and `long_term_debt`
+  (confirmed single-tag). AAPL reports
   `DepreciationDepletionAndAmortization` vs `Depreciation`, and
   `CashAndCashEquivalentsAtCarryingValue` vs `...RestrictedCash...`,
   simultaneously with different values in the same filing. The current
@@ -96,6 +96,25 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   financial companies are excluded because "pretax income minus
   non-operating interest" is meaningless for a bank. See
   [DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V7.
+- **`shares_outstanding` falls back to a weighted-average share count,
+  with a scale correction, when no point-in-time tag exists.** Checked
+  live: NKE/MRK/CVX/KO/JNJ/PG never tag `CommonStockSharesOutstanding`
+  at all; WMT tagged it only through FY2011, then stopped entirely.
+  `_select_shares_outstanding()` falls back to
+  `WeightedAverageNumberOfDilutedSharesOutstanding` (then `...Basic`) -
+  a fiscal-year average, not a balance-sheet-date count, flagged via
+  warning. Separately, McDonald's real 10-K reports that same tag at
+  the same scale as its dollar figures ("In millions," share count
+  included, on the face of the actual filing - not a tagging error), so
+  a value under 10,000,000 is assumed to be in millions and scaled
+  `x1,000,000`; this is a magnitude heuristic, not a structural signal
+  (SEC's companyconcept/companyfacts API doesn't expose the XBRL
+  `decimals` attribute that would otherwise reveal it), so a real
+  company with a legitimately tiny share count would be scaled
+  incorrectly. Visa is the one company checked with no fallback
+  available either - no shares-outstanding-shaped tag exists under any
+  namespace for it, a genuine data gap rather than a naming mismatch.
+  See [DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V8.
 
 ## Financial-metrics layer
 

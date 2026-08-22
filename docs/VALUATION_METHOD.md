@@ -232,6 +232,26 @@ valued, the equity-value bridge or per-share step is skipped with an
 explicit warning rather than silently treating the missing value as
 zero.
 
+`shares_outstanding` itself has the same kind of tag-availability gap
+`operating_income` does (see above). Checked live: NKE/MRK/CVX/KO/JNJ/PG
+never tag `CommonStockSharesOutstanding` at all, and WMT tagged it only
+through its FY2011 10-K, then stopped. `app/financials/normalizer.py`
+falls back to `WeightedAverageNumberOfDilutedSharesOutstanding` (then
+`...Basic`) when the point-in-time tag is absent - a weighted-average
+over the fiscal year rather than a balance-sheet-date count, flagged
+with a warning either way. A second, independent issue surfaced on
+McDonald's specifically: its weighted-average share tag is reported at
+the same scale as its dollar figures ("In millions" on the face of its
+real 10-K income statement, share count included - not a filer error),
+so a value under 10,000,000 is assumed to be in millions and scaled
+`x1,000,000` (verified exact: the corrected count divides MCD's real
+net income into $11.9528/share, matching its actual reported diluted
+EPS of $11.95). Visa is the one company checked where no fallback
+exists either - it has no shares-outstanding-shaped tag under any
+namespace, a genuine data gap, not a naming mismatch. See
+[DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V8 for the full verification
+trail.
+
 **`discount_rate` is a required user input, still never computed
 inside the DCF itself.** A reference WACC estimate exists
 (`wacc_estimate`, opt-in via `compute_wacc` - see section 1's WACC

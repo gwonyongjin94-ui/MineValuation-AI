@@ -506,3 +506,65 @@ NKE/MRK/CVX 모두 이제 `base_fcff`가 실제 값으로 계산되지만,
 `value_per_share`는 여전히 `None`이다 — 이 세 회사는 `shares_outstanding`
 태그도 따로 빠져 있는데(KO/JNJ/MCD/PG/WMT/V와 같은, 이미 알려진 별개의
 이슈), 그건 이번 요청 범위 밖이라 손대지 않았다.
+
+## V8 — shares_outstanding 역산: 9개 종목이 막혀 있던 진짜 이유가 3가지로 갈렸다
+
+엑셀을 다시 뽑아서 보여줬더니 NKE/MRK/CVX 칸이 여전히 비어 있다는 피드백을
+받고, "operating_income은 고쳤다면서 왜 안 바뀌었냐"는 의심을 받았다 —
+직접 `python scripts/analyze.py NKE 40.76`을 돌려서 경고가
+`operating_income: no standard tag found`가 아니라 `shares_outstanding
+not found`로 바뀌어 있는 걸 먼저 보여줘서, 앞선 수정은 제대로 작동했고
+막힌 지점이 완전히 다른 태그로 넘어갔을 뿐이라는 걸 증명한 뒤에 이 문제로
+들어갔다.
+
+**KO/JNJ/MCD/PG/WMT/V까지 포함해서 9개 종목 전부 실데이터로 원인을
+분리해서 확인**했다:
+1. NKE/MRK/CVX/KO/JNJ/PG (6개) — `CommonStockSharesOutstanding` 태그가
+   애초에 하나도 없음. 대신 EPS 계산에 쓰는
+   `WeightedAverageNumberOfDilutedSharesOutstanding`(또는 `...Basic`)은
+   전부 정상적으로, 실제 알려진 발행주식수와 맞아떨어지는 원단위 값으로
+   존재함(예: NKE 1,481,000,000 — 공개적으로 알려진 실제 발행주식수와
+   일치).
+2. WMT (1개) — `CommonStockSharesOutstanding`을 아예 안 쓴 게 아니라
+   **FY2011까지만 쓰고 FY2012부터 완전히 끊음** — 이번 세션 내내 반복된
+   "태그 마이그레이션" 패턴과 또 다른 변종("태그를 그냥 그만 쓴 회사").
+   WMT도 `WeightedAverageNumberOfDilutedSharesOutstanding`은 최신
+   10-K까지 정상 존재.
+3. V/Visa (1개) — `dei`/`us-gaap`/`srt`/`invest`/`ffd` 전체 네임스페이스를
+   뒤져봐도 발행주식수·가중평균주식수 그 어떤 형태의 태그도 존재하지
+   않음. 이건 "태그 이름이 다른" 문제가 아니라 **진짜로 이 회사가 그
+   개념 자체를 XBRL로 전혀 리포트하지 않는** 경우 — 역산으로 못 고치는
+   진짜 데이터 공백. `shares_outstanding: no standard tag found` 경고를
+   그대로 유지.
+
+**6+1(WMT) = 7개 종목은 가중평균 희석주식수로 폴백해서 고쳤다.** 이
+필드가 "특정 시점(대차대조표 기준일)의 발행주식수"가 아니라 "해당
+회계연도의 가중평균"이라는 개념 차이는 실존하지만(자사주 매입/신주
+발행이 연중에 크게 있었던 해라면 오차가 생길 수 있음), 실무에서 주당
+DCF 가치를 계산할 때 흔히 쓰이는 표준적인 대체 지표라 경고와 함께
+채택함 — 태그가 아예 없어서 계산 자체가 막히는 것보다 이 편이 훨씬
+낫다는 판단.
+
+**그런데 MCD에서 세 번째 문제가 하나 더 나왔다 — 단위 자체가 다르게
+찍혀 있었다.** MCD의 `WeightedAverageNumberOfDilutedSharesOutstanding`
+값이 `716.4`처럼 나오는데, 실제 발행주식수는 약 7억 1,640만 주다. 처음엔
+"필터링 회사의 XBRL 태깅 실수인가" 의심했지만, 실제 10-K 원문
+(`fetch_filing_document`로 직접 가져온 손익계산서)을 확인해보니
+McDonald's는 아예 **손익계산서 전체를 "In millions" 단위로 표시**하고,
+그 표 안의 "Weighted-average shares outstanding-diluted" 줄도 예외 없이
+`716.4`로 인쇄되어 있었다 — 실수가 아니라 회사가 실제로 그렇게
+공시한 것. SEC의 companyfacts/companyconcept API는 원본 XBRL의
+`decimals` 속성(스케일 정보)을 노출하지 않아서, 구조적으로 이걸 구분할
+방법이 없었다. 그래서 "이 프로젝트가 다루는 규모(DJIA 급 대형주)의
+회사라면 발행주식수가 1,000만 주 밑으로 떨어질 리 없다"는 크기 기반
+휴리스틱을 도입해서, 그 밑이면 백만 단위로 보정(×1,000,000)하고 경고를
+남기기로 했다. **검증**: 보정된 값(716,400,000)으로 순이익을 나누면
+$11.9528/주 — MCD의 실제 공시 희석 EPS $11.95와 정확히 일치, 확실한
+근거로 확인됨.
+
+**결과: NKE/MRK/CVX/KO/JNJ/MCD/PG/WMT 8개 종목 모두 실제 주당가치가
+나오기 시작했다. V(Visa)만 진짜 데이터 공백으로 여전히 `None`.**
+이걸로 세션 초반부터 반복됐던 "빈칸이 왜 이렇게 많냐"는 질문에 대한
+근본 원인이 사실상 다 규명됨 — operating_income 역산(V7) + 이번
+shares_outstanding 역산(V8) 두 건이 DJIA 30종목 표에서 관찰됐던 공백의
+대부분을 설명한다.
