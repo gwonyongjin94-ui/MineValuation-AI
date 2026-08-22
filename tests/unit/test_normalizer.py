@@ -458,3 +458,146 @@ def test_interest_expense_missing_leaves_none_with_warning():
 
     assert statement.interest_expense is None
     assert "interest_expense: no standard tag found for 2025-09-27" in statement.warnings
+
+
+def test_operating_income_derived_from_pretax_when_never_tagged_reproduces_nke_case():
+    # Nike's real FY2026 10-K, hand-verified: Revenues 46,398 - Cost of
+    # sales 26,487 - Demand creation 4,754 - Operating overhead 11,360 =
+    # 3,797 real operating income; OperatingIncomeLoss is never tagged at
+    # all (checked live - zero 10-K entries in Nike's full filing
+    # history), a legitimate GAAP choice (no subtotal line), not missing
+    # data.
+    company_facts = {
+        "cik": 1,
+        "entityName": "NKE-like",
+        **_facts(
+            {
+                "Revenues": [
+                    _entry(46398000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(3108000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": [
+                    _entry(3900000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+                "InterestIncomeExpenseNonoperatingNet": [
+                    _entry(50000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+                "OtherNonoperatingIncomeExpense": [
+                    _entry(53000000, "2026-05-31", fy=2026, filed="2026-07-01",
+                           accn="A-2026", start="2025-06-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.operating_income.value == 3797000000
+    assert statement.operating_income.xbrl_tag.startswith("derived(")
+    assert any(
+        "operating_income derived from pretax income" in w for w in statement.warnings
+    )
+
+
+def test_operating_income_derivation_defaults_missing_components_to_zero():
+    # Reproduces Chevron: pretax income exists but the interest/other
+    # tags this formula also uses don't - defaults them to 0 rather than
+    # giving up, since a partial derivation is still more useful than
+    # none, as long as it's flagged (checked live: Chevron's real
+    # structure has a third material reconciling item - equity affiliate
+    # income - this formula doesn't capture, so the derived figure is a
+    # known-incomplete approximation for exactly this kind of company).
+    company_facts = {
+        "cik": 2,
+        "entityName": "CVX-like",
+        **_facts(
+            {
+                "Revenues": [
+                    _entry(184432000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(17660000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments": [
+                    _entry(19743000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.operating_income.value == 19743000000
+
+
+def test_operating_income_derivation_skipped_for_financial_companies():
+    # A bank can have a matching pretax-income tag too (checked live on
+    # JPM) - the derivation must not fire for financial companies, since
+    # "pretax income minus non-operating interest" is meaningless when
+    # interest IS the core business, not a reconciling item.
+    company_facts = {
+        "cik": 3,
+        "entityName": "Bank-like",
+        **_facts(
+            {
+                "Revenues": [
+                    _entry(50000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(10000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": [
+                    _entry(12000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_BANK)
+
+    assert statement.operating_income is None
+    assert "operating_income: no standard tag found for 2025-12-31" in statement.warnings
+
+
+def test_operating_income_derivation_not_attempted_when_directly_tagged():
+    company_facts = {
+        "cik": 4,
+        "entityName": "HD-like",
+        **_facts(
+            {
+                "Revenues": [
+                    _entry(100000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "NetIncomeLoss": [
+                    _entry(15000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "OperatingIncomeLoss": [
+                    _entry(20000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+                "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest": [
+                    _entry(99999999999, "2025-12-31", fy=2025, filed="2026-02-01",
+                           accn="A-2025", start="2025-01-01"),
+                ],
+            }
+        ),
+    }
+
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    assert statement.operating_income.value == 20000000000
+    assert statement.operating_income.xbrl_tag == "OperatingIncomeLoss"

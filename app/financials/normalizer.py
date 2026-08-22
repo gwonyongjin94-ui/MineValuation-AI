@@ -127,6 +127,29 @@ SHORT_TERM_DEBT_ADDITIVE_TAGS = ("ShortTermBorrowings", "LongTermDebtCurrent")
 # only tried when neither of them has a match for the period.
 SHORT_TERM_DEBT_FALLBACK_TAG = "DebtCurrent"
 
+# operating_income fallback: Nike, Merck, and Chevron (checked live against
+# their real 10-K income statements, not assumed) never tag
+# OperatingIncomeLoss at all - a legitimate GAAP choice (no rule requires a
+# separate operating-income subtotal line), not missing data. When it's
+# absent, this derives an approximation from what IS tagged:
+#
+#   operating_income = pretax_income - interest_income_expense_net
+#                                     - other_nonoperating_income_expense
+#
+# Verified exactly against NKE's and MRK's real, hand-read income
+# statements. NOT verified complete for every company that lacks
+# OperatingIncomeLoss - Chevron has a third material reconciling item
+# (income from equity affiliates, ~$3B) this formula doesn't capture,
+# understating operating income for integrated oil majors. Always
+# returned with an explicit warning for exactly this reason - it's an
+# approximation, not a figure read directly off the filing.
+OPERATING_INCOME_PRETAX_TAGS = (
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+)
+OPERATING_INCOME_INTEREST_TAG = "InterestIncomeExpenseNonoperatingNet"
+OPERATING_INCOME_OTHER_TAG = "OtherNonoperatingIncomeExpense"
+
 _FINANCIAL_SIC_RANGE = range(6000, 6800)
 
 
@@ -279,6 +302,40 @@ def _select_short_term_debt(
     return _resolve_matches(fallback_matches, "short_term_debt", taxonomy)
 
 
+def _derive_operating_income(
+    facts_ns: dict, period_end: date
+) -> tuple[FinancialFact | None, list[FinancialFact], list[str]]:
+    taxonomy = "us-gaap"
+    pretax_matches = _collect_matches(
+        facts_ns, taxonomy, list(OPERATING_INCOME_PRETAX_TAGS), period_end, is_duration=True
+    )
+    pretax, pretax_restated = _resolve_matches(pretax_matches, "operating_income", taxonomy)
+    if pretax is None:
+        return None, [], []
+
+    def _optional_component(tag: str) -> float:
+        matches = _collect_matches(facts_ns, taxonomy, [tag], period_end, is_duration=True)
+        fact, _ = _resolve_matches(matches, "operating_income", taxonomy)
+        return fact.value if fact is not None else 0.0
+
+    interest_net = _optional_component(OPERATING_INCOME_INTEREST_TAG)
+    other_net = _optional_component(OPERATING_INCOME_OTHER_TAG)
+    derived_value = pretax.value - interest_net - other_net
+
+    derived_tag = f"derived({pretax.xbrl_tag}-{OPERATING_INCOME_INTEREST_TAG}-{OPERATING_INCOME_OTHER_TAG})"
+    derived_fact = pretax.model_copy(update={"value": derived_value, "xbrl_tag": derived_tag})
+    warning = (
+        "operating_income derived from pretax income minus non-operating interest/other "
+        "items - this company never tags OperatingIncomeLoss at all (a legitimate GAAP "
+        "presentation choice, not missing data), so this is an approximation, not a figure "
+        "read directly off the filing. Not verified complete for every company: may "
+        "understate operating income where a third reconciling item exists (e.g. "
+        "equity-method investment income at integrated oil majors) that this formula "
+        "doesn't account for."
+    )
+    return derived_fact, pretax_restated, [warning]
+
+
 def _to_fact(metric: str, taxonomy: str, tag: str, unit: str, entry: dict) -> FinancialFact:
     return FinancialFact(
         metric=metric,
@@ -307,6 +364,20 @@ def _build_statement(company: CompanyInfo, facts_ns: dict, period_end: date) -> 
             fact, restated = _select_short_term_debt(facts_ns, period_end)
         else:
             fact, restated = _select_fact(facts_ns, metric, period_end)
+        if (
+            metric == "operating_income"
+            and fact is None
+            and company.valuation_category == ValuationCategory.STANDARD
+        ):
+            # Financial companies (banks) are excluded here on purpose - a
+            # bank's pretax income minus "non-operating interest" makes no
+            # sense (interest income/expense IS the core business, not a
+            # reconciling item), and checked live that JPM does have a
+            # matching pretax-income tag, so without this guard the
+            # derivation fires and produces a number that looks plausible
+            # but describes nothing real. See finding #6 (DATA_SPIKE_NOTES.md).
+            fact, restated, derive_warnings = _derive_operating_income(facts_ns, period_end)
+            warnings.extend(derive_warnings)
         fields[metric] = fact
         restated_facts.extend(restated)
         if fact is None:

@@ -24,6 +24,33 @@ the two live in different modules with different names on purpose.
   simplification: EBIT can differ from operating income when a company
   reports non-operating items inside it, and there is no separate EBIT
   tag normalized in the schema.
+- Some companies (verified live: NKE, MRK, CVX) never tag
+  `OperatingIncomeLoss` at all - not a migration gap, but a legitimate
+  GAAP presentation choice (no subtotal line is required). When no
+  operating-income tag exists at all, `app/financials/normalizer.py`
+  derives one as a last-resort fallback:
+
+  ```
+  operating_income = pretax_income - InterestIncomeExpenseNonoperatingNet
+                                    - OtherNonoperatingIncomeExpense
+  ```
+
+  Verified exact against NKE's and MRK's real income statements. Not
+  universally valid - cross-checked against HD and MSFT (companies
+  that DO have a real `OperatingIncomeLoss` tag) and the formula did
+  not reproduce their true figures, so it only ever fires when
+  `operating_income` has no tag at all, and it never overrides a real
+  tag. It's also not guaranteed complete: CVX lacks a third
+  reconciling item (equity-affiliate income, ~$3B) that this formula
+  doesn't capture, so its derived value understates true operating
+  income. Restricted to `ValuationCategory.STANDARD` companies -
+  financial companies (banks) can coincidentally have a matching
+  pretax-income tag too, but "pretax income minus non-operating
+  interest" is meaningless for a bank, where interest income/expense
+  IS the core business. Always returned with an explicit warning so
+  it's never mistaken for a figure read directly off the filing. See
+  [DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V7 for the full
+  verification trail.
 - **tax_rate** is a required, direct input to `ValuationAssumptions` -
   not derived as an "effective" or "marginal" rate. Deriving either
   would need `income_tax_expense` and `pretax_income`, neither of

@@ -80,6 +80,22 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   `short_term_debt`'s fix), not data-quality noise, but this was a
   scan of five companies, not an exhaustive one - a similar issue for
   a metric not yet checked this closely could still exist.
+- **`operating_income` is derived, not just tagged, when no
+  operating-income concept exists at all.** Verified live: NKE, MRK,
+  and CVX never tag `OperatingIncomeLoss` (a legitimate GAAP
+  presentation choice, not missing data), so
+  `_derive_operating_income()` falls back to
+  `pretax_income - InterestIncomeExpenseNonoperatingNet -
+  OtherNonoperatingIncomeExpense`. This is an approximation flagged
+  with an explicit warning, not a value read directly off the filing -
+  it's known-incomplete for CVX specifically (missing a third
+  reconciling item, equity-affiliate income, ~$3B), and it's not
+  guaranteed correct for any company beyond the ones checked. It only
+  fires when `operating_income` has no tag at all (never overrides a
+  real tag) and only for `ValuationCategory.STANDARD` companies -
+  financial companies are excluded because "pretax income minus
+  non-operating interest" is meaningless for a bank. See
+  [DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V7.
 
 ## Financial-metrics layer
 
