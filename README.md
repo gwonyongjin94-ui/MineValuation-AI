@@ -62,6 +62,20 @@ Overlap                     ├─┤
 `Overlap` 바 대신 "no overlap" 경고가 뜬다 - 억지로 하나로 합치지 않고 방법들이
 의견이 갈린다는 걸 그대로 보여줌.
 
+`--10k`/`--earnings-call`을 주면 정성 리스크 추출까지 이 스크립트 안에서
+같이 돈다(서버 안 띄우고):
+```bash
+python scripts/analyze.py AAPL 230 --10k
+python scripts/analyze.py AAPL 230 --earnings-call transcript.txt
+```
+`--earnings-call`은 어닝콜 텍스트를 붙여넣은 `.txt` 파일 경로를 받는다(터미널
+인자로 긴 텍스트를 직접 넣긴 비현실적이라서). 둘 다 API와 똑같이
+`ANTHROPIC_API_KEY`가 `.env`에 있어야 하고(`app.config.get_settings()`로
+API와 같은 경로로 읽음), 호출당 비용이 실제로 발생한다 - 키가 없으면
+LLM을 호출하기 전에 바로 에러로 알려준다. `cross_validate`/`include_sentiment`
+같은 나머지 정성분석 옵션은 이 스크립트에 없음 - 그게 필요하면 서버를
+띄워서 API를 직접 호출할 것(아래 "정성분석 포함" 참고).
+
 ### 기본 사용 (정량만, 무료) - HTTP API로
 
 ```bash

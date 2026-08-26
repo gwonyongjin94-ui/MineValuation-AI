@@ -5,20 +5,32 @@
 No server, no curl, no JSON - calls the same analyze() the HTTP API
 uses, directly, with this project's own DEFAULT_ASSUMPTIONS (see
 app/api/analysis.py) so results match what /api/v1/analyze would
-return with no assumptions override. Not a substitute for the API
-(no qualitative/sentiment/cross-validate options here) - just the
-fast path for "one ticker, one price, what's the number."
+return with no assumptions override. Not a full substitute for the API
+(no sentiment/cross-validate options here) - just the fast path for
+"one ticker, one price, what's the number," with optional qualitative
+risk extraction bolted on:
+
+    python scripts/analyze.py AAPL 230 --10k
+    python scripts/analyze.py AAPL 230 --earnings-call transcript.txt
+
+Both need ANTHROPIC_API_KEY set in .env (same key the API's
+analyze_10k/earnings_call_text options use) - this script reads it via
+the same app.config.get_settings() the API does, not a separate path.
 """
 
 import argparse
 import sys
 from datetime import date
 
+import anthropic
+
 from app.api.analysis import DEFAULT_ASSUMPTIONS
+from app.config import get_settings
 from app.data.exceptions import SECClientError, UnknownTickerError
 from app.data.market_data import build_default_market_data_client
 from app.data.sec_client import build_default_client
 from app.data.ticker_map import build_default_ticker_map
+from app.qualitative.risk_extraction import QualitativeAnalysisError, QualitativeRiskAnalysis
 from app.services.analysis_service import analyze
 from app.valuation.consensus import ValueRange
 
@@ -93,11 +105,56 @@ def format_range_chart(ranges: list[ValueRange], width: int = CHART_WIDTH) -> st
     return "\n".join(lines).rstrip()
 
 
+def _print_qualitative_analysis(analysis: QualitativeRiskAnalysis) -> None:
+    print()
+    print(f"--- qualitative risks: {analysis.source_label} (model: {analysis.model}) ---")
+    print(analysis.summary)
+    print()
+    for risk in analysis.risks:
+        print(f"  [{risk.severity.value.upper()}/{risk.status.value}] {risk.label}")
+        print(f"    {risk.description}")
+        print(f'    quote ({risk.grounding.value}): "{risk.supporting_quote}"')
+    print(
+        f"  ({analysis.input_tokens} input / {analysis.output_tokens} output tokens - "
+        "real Anthropic API cost)"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ticker")
     parser.add_argument("market_price", type=float)
+    parser.add_argument(
+        "--10k", dest="analyze_10k", action="store_true",
+        help="extract qualitative risks from the most recent 10-K (needs ANTHROPIC_API_KEY)",
+    )
+    parser.add_argument(
+        "--earnings-call", dest="earnings_call_file", metavar="FILE",
+        help="path to a text file with an earnings call transcript to analyze for risks "
+        "(needs ANTHROPIC_API_KEY)",
+    )
     args = parser.parse_args()
+
+    earnings_call_text = None
+    if args.earnings_call_file:
+        try:
+            with open(args.earnings_call_file, encoding="utf-8") as f:
+                earnings_call_text = f.read()
+        except OSError as exc:
+            print(f"error: couldn't read --earnings-call file: {exc}", file=sys.stderr)
+            return 1
+
+    anthropic_client = None
+    if args.analyze_10k or earnings_call_text:
+        api_key = get_settings().anthropic_api_key
+        if not api_key:
+            print(
+                "error: --10k/--earnings-call need ANTHROPIC_API_KEY set in .env "
+                "(get one at console.anthropic.com)",
+                file=sys.stderr,
+            )
+            return 1
+        anthropic_client = anthropic.Anthropic(api_key=api_key)
 
     client = build_default_client()
     market_data_client = build_default_market_data_client()
@@ -111,12 +168,18 @@ def main() -> int:
             ticker_map=build_default_ticker_map(),
             compute_comps=True,
             market_data_client=market_data_client,
+            analyze_10k=args.analyze_10k,
+            earnings_call_text=earnings_call_text,
+            anthropic_client=anthropic_client,
         )
     except UnknownTickerError as exc:
         print(f"error: unknown ticker '{exc}' (not in the local ticker cache)", file=sys.stderr)
         return 1
     except SECClientError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except QualitativeAnalysisError as exc:
+        print(f"error: qualitative analysis failed: {exc}", file=sys.stderr)
         return 1
     finally:
         client.close()
@@ -195,6 +258,9 @@ def main() -> int:
             print()
             for warning in consensus.warnings:
                 print(f"  ! {warning}")
+
+    for analysis in result.qualitative_analyses:
+        _print_qualitative_analysis(analysis)
 
     return 0
 
