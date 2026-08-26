@@ -24,12 +24,17 @@ from datetime import date
 from pydantic import BaseModel
 
 from app.data.filing_documents import fetch_filing_document, list_recent_filings
-from app.data.market_data import MarketDataError, fetch_risk_free_rate
+from app.data.market_data import MarketDataError, fetch_fx_rate, fetch_risk_free_rate
 from app.data.models import CompanyInfo, FinancialStatement
 from app.data.sec_client import SECClient
 from app.data.ticker_map import TickerMap
 from app.financials.metrics import YearMetrics, compute_metrics
-from app.financials.normalizer import build_company_info, normalize
+from app.financials.normalizer import (
+    build_company_info,
+    convert_statements_to_usd,
+    normalize,
+    statement_currency,
+)
 from app.qualitative.risk_extraction import (
     QualitativeAnalysisError,
     QualitativeRiskAnalysis,
@@ -136,16 +141,40 @@ def analyze(
 
     company = build_company_info(company_facts, submissions)
     statements = normalize(company_facts, submissions)
-    metrics = compute_metrics(statements)
-    fundamental_growth_estimate = estimate_fundamental_growth_rate(
-        statements, assumptions.tax_rate, market_price=market_price
-    )
 
     warnings = [
         f"FY{statement.fiscal_year}: {warning}"
         for statement in statements
         for warning in statement.warnings
     ]
+
+    # An IFRS foreign private issuer (Form 20-F, e.g. NVO) reports its
+    # financials in its home currency, not USD - `market_price` is always
+    # assumed USD (that's how it's quoted for a US-listed ticker), so
+    # every monetary fact must be converted before anything downstream
+    # (FCFF, DCF, WACC, comps, owner earnings) reads it. Applied once,
+    # here, right after normalize() - not inside it, which stays
+    # offline/pure on purpose - so every consumer of `statements` below
+    # gets already-USD figures with no currency-awareness of its own.
+    reporting_currency = statement_currency(statements[-1]) if statements else None
+    if reporting_currency and reporting_currency != "USD":
+        if market_data_client is None:
+            raise MarketDataError(
+                f"{ticker} reports in {reporting_currency}, not USD - a market data client "
+                "is required to fetch a live FX rate for currency conversion"
+            )
+        fx_rate = fetch_fx_rate(reporting_currency, "USD", market_data_client)
+        statements = convert_statements_to_usd(statements, fx_rate, reporting_currency)
+        warnings.append(
+            f"financial statements converted from {reporting_currency} to USD at a live "
+            f"spot rate of {fx_rate:.4f} (fetched just now, not the rate on each fact's "
+            "own filing date) - see LIMITATIONS.md"
+        )
+
+    metrics = compute_metrics(statements)
+    fundamental_growth_estimate = estimate_fundamental_growth_rate(
+        statements, assumptions.tax_rate, market_price=market_price
+    )
 
     wacc_estimate = None
     if compute_wacc and statements:

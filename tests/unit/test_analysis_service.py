@@ -19,6 +19,8 @@ from tests.factories import (
     fake_anthropic_client,
     fake_anthropic_client_by_model,
     fake_sentiment_classifier,
+    sec_entry,
+    sec_facts,
     standard_company_facts,
 )
 
@@ -447,3 +449,99 @@ def test_analyze_valuation_consensus_empty_for_financial_company(tmp_path):
 
     assert result.valuation_consensus.ranges == []
     assert any("no valuation method produced a range" in w for w in result.valuation_consensus.warnings)
+
+
+def _ifrs_company_facts() -> dict:
+    # Small, internally-consistent IFRS/20-F fixture (not NVO's real
+    # magnitudes - test_normalizer.py's test_normalize_ifrs_filer_
+    # reproduces_nvo_case already covers the real-scale numbers). Two
+    # fiscal years, like standard_company_facts(): FCFF for the first
+    # year is always None (no prior year to diff NWC against - see
+    # fcff.py), so margin_of_safety needs a second year to be computable
+    # at all.
+    def _dur(tag_2024, tag_2025):
+        return [
+            sec_entry(tag_2024, "2024-12-31", 2024, form="20-F", filed="2025-02-01",
+                      accn="NVOX-2024", start="2024-01-01"),
+            sec_entry(tag_2025, "2025-12-31", 2025, form="20-F", filed="2026-02-04",
+                      accn="NVOX-2025", start="2025-01-01"),
+        ]
+
+    def _inst(val_2024, val_2025):
+        return [
+            sec_entry(val_2024, "2024-12-31", 2024, form="20-F", filed="2025-02-01",
+                      accn="NVOX-2024"),
+            sec_entry(val_2025, "2025-12-31", 2025, form="20-F", filed="2026-02-04",
+                      accn="NVOX-2025"),
+        ]
+
+    monetary_tags = {
+        "Revenue": _dur(900000, 1000000),
+        "ProfitLossFromOperatingActivities": _dur(180000, 200000),
+        "ProfitLoss": _dur(130000, 150000),
+        "CashFlowsFromUsedInOperatingActivities": _dur(200000, 220000),
+        "DepreciationAndAmortisationExpense": _dur(28000, 30000),
+        "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities": _dur(35000, 40000),
+        "CurrentAssets": _inst(280000, 300000),
+        "CurrentLiabilities": _inst(170000, 180000),
+        "CashAndCashEquivalents": _inst(45000, 50000),
+        "ShorttermBorrowings": _inst(18000, 20000),
+        "LongtermBorrowings": _inst(85000, 90000),
+        "Equity": _inst(230000, 250000),
+    }
+    share_tags = {"NumberOfSharesOutstanding": _inst(10000, 10000)}
+    return {
+        "cik": 1,
+        "entityName": "IFRS Test Co",
+        "facts": {
+            "ifrs-full": {
+                **sec_facts(monetary_tags, taxonomy="ifrs-full", unit="DKK")["facts"]["ifrs-full"],
+                **sec_facts(share_tags, taxonomy="ifrs-full", unit="shares")["facts"]["ifrs-full"],
+            }
+        },
+    }
+
+
+def _fx_client(rate: float) -> httpx.Client:
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = {"chart": {"result": [{"meta": {"regularMarketPrice": rate}}]}}
+        return httpx.Response(200, json=body)
+
+    return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+def test_analyze_ifrs_filer_raises_without_market_data_client(tmp_path):
+    with pytest.raises(MarketDataError):
+        analyze(
+            ticker="NVOX",
+            market_price=48.69,
+            as_of_date=date(2026, 1, 1),
+            assumptions=_assumptions(),
+            client=build_mock_sec_client(STANDARD_SUBMISSIONS, _ifrs_company_facts()),
+            ticker_map=build_ticker_map_with_cache(tmp_path, {"NVOX": 777777}),
+        )
+
+
+def test_analyze_ifrs_filer_converts_currency_and_computes_valuation(tmp_path):
+    result = analyze(
+        ticker="NVOX",
+        market_price=48.69,
+        # After both fixture statements' filed dates (2026-02-04) - an
+        # earlier as_of_date look-ahead-excludes the FY2025 statement
+        # (the only one with a computable FCFF; FY2024 is the first
+        # year, so it has no prior year to diff NWC against - see
+        # fcff.py), leaving nothing for margin_of_safety to compute.
+        as_of_date=date(2026, 3, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, _ifrs_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"NVOX": 777777}),
+        market_data_client=_fx_client(0.156),
+    )
+
+    assert result.margin_of_safety is not None
+    latest = max(result.financials, key=lambda s: s.period_end)
+    assert latest.revenue.unit == "USD"
+    assert latest.revenue.value == pytest.approx(1000000 * 0.156)
+    # Currency-agnostic - untouched by the conversion.
+    assert latest.shares_outstanding.value == 10000
+    assert any("converted from DKK to USD" in w for w in result.warnings)

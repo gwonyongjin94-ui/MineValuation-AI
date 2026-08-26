@@ -85,10 +85,10 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | Module | Responsibility | Does NOT do |
 |---|---|---|
 | `data/sec_client.py` | HTTP to SEC EDGAR, throttling, error mapping | Know what a "revenue" tag is |
-| `data/market_data.py` | HTTP to FRED (risk-free rate) and Yahoo Finance (peer current price) | Know anything about SEC filings |
+| `data/market_data.py` | HTTP to FRED (risk-free rate), Yahoo Finance (peer current price, FX spot rate) | Know anything about SEC filings |
 | `data/ticker_map.py` | ticker -> CIK, cached locally | Know anything about financials |
 | `data/models.py` | Schema for a normalized fact/statement | Select which tag to use |
-| `financials/normalizer.py` | Pick the right XBRL fact per metric/period | Compute ratios or value anything |
+| `financials/normalizer.py` | Pick the right XBRL fact per metric/period (us-gaap or ifrs-full); pure currency conversion given a rate | Compute ratios, value anything, or make network calls |
 | `financials/metrics.py` | Pure ratios (margins, growth, simple FCF) | Use a discount rate or forecast |
 | `valuation/assumptions.py` | Typed, validated assumption inputs | Contain a growth/discount/tax number itself |
 | `valuation/fcff.py` | FCFF per statement, base-FCFF selection | Discount anything |

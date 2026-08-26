@@ -2,7 +2,9 @@
 
 Selection rules (all confirmed against real data in the Phase 1.5 spike,
 not assumed):
-- A fact must be annual: fp == "FY", form in (10-K, 10-K/A).
+- A fact must be annual: fp == "FY", form in (10-K, 10-K/A) for a
+  US-GAAP filer, or (20-F, 20-F/A) for an IFRS foreign private issuer
+  (see IFRS_CONCEPT_CANDIDATES below).
 - Duration concepts (income/cash-flow items) additionally need a ~365-day
   start/end span - fp alone let quarterly restatement data leak through
   in the HBB case (finding #4).
@@ -10,6 +12,14 @@ not assumed):
   filings often re-show the same period as a comparative with an
   identical value (not a restatement); a later fact is only treated as a
   restatement if its value actually differs (finding #3).
+
+This module is deliberately offline/pure - no network calls. A foreign
+private issuer's IFRS statements are reported in its home currency (e.g.
+Novo Nordisk reports in DKK, checked live: it has zero us-gaap facts,
+253 ifrs-full facts), so a separate, network-dependent step
+(convert_statements_to_usd() below, called by the service layer with a
+live FX rate) is needed before those figures are USD-comparable to a
+market price - see DATA_SPIKE_NOTES.md V9.
 """
 
 from datetime import date
@@ -17,6 +27,8 @@ from datetime import date
 from app.data.models import CompanyInfo, FinancialFact, FinancialStatement, ValuationCategory
 
 ANNUAL_FORMS = ("10-K", "10-K/A")
+IFRS_ANNUAL_FORMS = ("20-F", "20-F/A")
+TAXONOMY_ANNUAL_FORMS = {"us-gaap": ANNUAL_FORMS, "ifrs-full": IFRS_ANNUAL_FORMS}
 
 # taxonomy, candidate tags in priority order. A filing uses one tag
 # consistently across its comparative years (finding #2), so we don't
@@ -101,6 +113,65 @@ CONCEPT_CANDIDATES: dict[str, tuple[str, list[str]]] = {
 }
 
 DURATION_METRICS = {
+    "revenue",
+    "operating_income",
+    "net_income",
+    "operating_cash_flow",
+    "depreciation_amortization",
+    "capex",
+    "interest_expense",
+}
+
+# IFRS equivalent of CONCEPT_CANDIDATES, for foreign private issuers that
+# file Form 20-F instead of a 10-K. Checked live against Novo Nordisk
+# (NVO) - it reports zero us-gaap facts, only ifrs-full - and every tag
+# below was verified against its real FY2025 20-F figures (revenue,
+# operating profit, net profit all matched Novo Nordisk's actual
+# reported DKK figures). Unlike CONCEPT_CANDIDATES, none of these are
+# multi-candidate fallback chains - IFRS tag usage for a second company
+# hasn't been checked yet, so this intentionally only encodes what's
+# verified for NVO rather than guessing at alternates that might exist
+# for other IFRS filers.
+#
+# Two US-GAAP-only features deliberately do NOT have an IFRS equivalent
+# here, because they'd require verifying tag semantics for companies
+# this project hasn't looked at yet:
+# - short_term_debt's additive-tags handling (_select_short_term_debt) -
+#   NVO's ShorttermBorrowings and CurrentPortionOfLongtermBorrowings are
+#   confirmed identical values (one balance-sheet line, dual-tagged), not
+#   separate additive components like GAAP's ShortTermBorrowings +
+#   LongTermDebtCurrent, so short_term_debt is a plain single-tag lookup.
+# - operating_income derivation (_derive_operating_income) and
+#   shares_outstanding's weighted-average fallback
+#   (_select_shares_outstanding) - NVO tags both directly
+#   (ProfitLossFromOperatingActivities, NumberOfSharesOutstanding), so
+#   neither fallback is needed for the one IFRS filer verified so far.
+#
+# capex is PP&E purchases only, matching how the us-gaap capex candidates
+# work (also PP&E-only, no R&D/intangible capitalization included). NVO
+# also reports a separate, sometimes-large PurchaseOfIntangibleAssets
+# line (DKK 30bn in FY2025, 7x the prior year) not included here - a
+# documented simplification, not verified as either a recurring capex
+# item or a one-off (e.g. licensing/M&A), so it's deliberately left out
+# rather than guessed into the total.
+IFRS_CONCEPT_CANDIDATES: dict[str, tuple[str, list[str]]] = {
+    "revenue": ("ifrs-full", ["Revenue"]),
+    "operating_income": ("ifrs-full", ["ProfitLossFromOperatingActivities"]),
+    "net_income": ("ifrs-full", ["ProfitLoss"]),
+    "operating_cash_flow": ("ifrs-full", ["CashFlowsFromUsedInOperatingActivities"]),
+    "depreciation_amortization": ("ifrs-full", ["DepreciationAndAmortisationExpense"]),
+    "capex": ("ifrs-full", ["PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"]),
+    "current_assets": ("ifrs-full", ["CurrentAssets"]),
+    "current_liabilities": ("ifrs-full", ["CurrentLiabilities"]),
+    "cash": ("ifrs-full", ["CashAndCashEquivalents"]),
+    "short_term_debt": ("ifrs-full", ["ShorttermBorrowings"]),
+    "long_term_debt": ("ifrs-full", ["LongtermBorrowings"]),
+    "stockholders_equity": ("ifrs-full", ["Equity"]),
+    "shares_outstanding": ("ifrs-full", ["NumberOfSharesOutstanding"]),
+    "interest_expense": ("ifrs-full", ["InterestExpense"]),
+}
+
+IFRS_DURATION_METRICS = {
     "revenue",
     "operating_income",
     "net_income",
@@ -196,11 +267,30 @@ def classify_company(sic: str | None) -> ValuationCategory:
     return ValuationCategory.STANDARD
 
 
+def _detect_taxonomy(facts_ns: dict) -> str | None:
+    # A filer reports under exactly one of these, never both - checked
+    # live: NVO (IFRS, 20-F) has zero us-gaap facts, only ifrs-full.
+    if facts_ns.get("us-gaap"):
+        return "us-gaap"
+    if facts_ns.get("ifrs-full"):
+        return "ifrs-full"
+    return None
+
+
 def normalize(company_facts: dict, submissions: dict) -> list[FinancialStatement]:
     company = build_company_info(company_facts, submissions)
     facts_ns = company_facts.get("facts", {})
-    period_ends = _discover_period_ends(facts_ns)
-    return [_build_statement(company, facts_ns, period_end) for period_end in sorted(period_ends)]
+    taxonomy = _detect_taxonomy(facts_ns)
+    if taxonomy is None:
+        return []
+    concept_candidates = CONCEPT_CANDIDATES if taxonomy == "us-gaap" else IFRS_CONCEPT_CANDIDATES
+    duration_metrics = DURATION_METRICS if taxonomy == "us-gaap" else IFRS_DURATION_METRICS
+
+    period_ends = _discover_period_ends(facts_ns, concept_candidates)
+    return [
+        _build_statement(company, facts_ns, period_end, concept_candidates, duration_metrics, taxonomy)
+        for period_end in sorted(period_ends)
+    ]
 
 
 def build_company_info(company_facts: dict, submissions: dict) -> CompanyInfo:
@@ -216,8 +306,8 @@ def build_company_info(company_facts: dict, submissions: dict) -> CompanyInfo:
     )
 
 
-def _is_annual_entry(entry: dict, *, is_duration: bool) -> bool:
-    if entry.get("form") not in ANNUAL_FORMS:
+def _is_annual_entry(entry: dict, *, is_duration: bool, taxonomy: str) -> bool:
+    if entry.get("form") not in TAXONOMY_ANNUAL_FORMS.get(taxonomy, ANNUAL_FORMS):
         return False
     if entry.get("fp") != "FY":
         return False
@@ -230,10 +320,10 @@ def _is_annual_entry(entry: dict, *, is_duration: bool) -> bool:
     return 350 <= span <= 380
 
 
-def _discover_period_ends(facts_ns: dict) -> set[date]:
+def _discover_period_ends(facts_ns: dict, concept_candidates: dict) -> set[date]:
     period_ends: set[date] = set()
     for metric in ("revenue", "net_income"):
-        taxonomy, tags = CONCEPT_CANDIDATES[metric]
+        taxonomy, tags = concept_candidates[metric]
         ns = facts_ns.get(taxonomy, {})
         for tag in tags:
             concept = ns.get(tag)
@@ -241,7 +331,7 @@ def _discover_period_ends(facts_ns: dict) -> set[date]:
                 continue
             for entries in concept.get("units", {}).values():
                 for entry in entries:
-                    if _is_annual_entry(entry, is_duration=True):
+                    if _is_annual_entry(entry, is_duration=True, taxonomy=taxonomy):
                         period_ends.add(date.fromisoformat(entry["end"]))
     return period_ends
 
@@ -259,7 +349,7 @@ def _collect_matches(
             for entry in entries:
                 if entry.get("end") != period_end.isoformat():
                     continue
-                if not _is_annual_entry(entry, is_duration=is_duration):
+                if not _is_annual_entry(entry, is_duration=is_duration, taxonomy=taxonomy):
                     continue
                 matches.append((tag, unit, entry))
     return matches
@@ -297,10 +387,10 @@ def _resolve_matches(
 
 
 def _select_fact(
-    facts_ns: dict, metric: str, period_end: date
+    facts_ns: dict, metric: str, period_end: date, concept_candidates: dict, duration_metrics: set
 ) -> tuple[FinancialFact | None, list[FinancialFact]]:
-    taxonomy, tags = CONCEPT_CANDIDATES[metric]
-    is_duration = metric in DURATION_METRICS
+    taxonomy, tags = concept_candidates[metric]
+    is_duration = metric in duration_metrics
     matches = _collect_matches(facts_ns, taxonomy, tags, period_end, is_duration=is_duration)
     return _resolve_matches(matches, metric, taxonomy)
 
@@ -370,7 +460,9 @@ def _derive_operating_income(
 def _select_shares_outstanding(
     facts_ns: dict, period_end: date
 ) -> tuple[FinancialFact | None, list[FinancialFact], list[str]]:
-    fact, restated = _select_fact(facts_ns, "shares_outstanding", period_end)
+    fact, restated = _select_fact(
+        facts_ns, "shares_outstanding", period_end, CONCEPT_CANDIDATES, DURATION_METRICS
+    )
     if fact is not None:
         return fact, restated, []
 
@@ -422,21 +514,38 @@ def _to_fact(metric: str, taxonomy: str, tag: str, unit: str, entry: dict) -> Fi
     )
 
 
-def _build_statement(company: CompanyInfo, facts_ns: dict, period_end: date) -> FinancialStatement:
+def _build_statement(
+    company: CompanyInfo,
+    facts_ns: dict,
+    period_end: date,
+    concept_candidates: dict,
+    duration_metrics: set,
+    taxonomy: str,
+) -> FinancialStatement:
     fields: dict[str, FinancialFact | None] = {}
     restated_facts: list[FinancialFact] = []
     warnings: list[str] = []
+    # These three US-GAAP-specific selection strategies (additive
+    # short_term_debt, operating_income derivation, weighted-average
+    # shares_outstanding fallback) only apply to us-gaap filers - none of
+    # them are verified against a second IFRS filer yet, so an IFRS
+    # company just gets the plain single-tag lookup like every other
+    # metric (see IFRS_CONCEPT_CANDIDATES's module docstring for why).
+    is_us_gaap = taxonomy == "us-gaap"
 
-    for metric in CONCEPT_CANDIDATES:
-        if metric == "short_term_debt":
+    for metric in concept_candidates:
+        if is_us_gaap and metric == "short_term_debt":
             fact, restated = _select_short_term_debt(facts_ns, period_end)
-        elif metric == "shares_outstanding":
+        elif is_us_gaap and metric == "shares_outstanding":
             fact, restated, share_warnings = _select_shares_outstanding(facts_ns, period_end)
             warnings.extend(share_warnings)
         else:
-            fact, restated = _select_fact(facts_ns, metric, period_end)
+            fact, restated = _select_fact(
+                facts_ns, metric, period_end, concept_candidates, duration_metrics
+            )
         if (
-            metric == "operating_income"
+            is_us_gaap
+            and metric == "operating_income"
             and fact is None
             and company.valuation_category == ValuationCategory.STANDARD
         ):
@@ -466,3 +575,50 @@ def _build_statement(company: CompanyInfo, facts_ns: dict, period_end: date) -> 
         warnings=warnings,
         **fields,
     )
+
+
+def statement_currency(statement: FinancialStatement) -> str | None:
+    """The reporting currency of a statement's monetary facts (e.g. "DKK"
+    for an IFRS filer, "USD" for a us-gaap one), read off whichever
+    monetary metric happens to be populated - `shares_outstanding`'s unit
+    is "shares", never a currency, so it's skipped here on purpose.
+    Returns None only if every monetary metric is missing for this
+    statement, which shouldn't happen given fiscal-year discovery already
+    requires revenue or net_income to exist.
+    """
+    for metric in CONCEPT_CANDIDATES:
+        if metric == "shares_outstanding":
+            continue
+        fact = getattr(statement, metric)
+        if fact is not None:
+            return fact.unit
+    return None
+
+
+def convert_statements_to_usd(
+    statements: list[FinancialStatement], rate: float, from_currency: str
+) -> list[FinancialStatement]:
+    """Applies a live FX rate to every monetary fact (not
+    `shares_outstanding` - a share count, not a currency amount) across a
+    list of statements, converting `from_currency` -> USD.
+
+    Pure and offline on purpose, like the rest of this module - the rate
+    itself is fetched by the caller (app/data/market_data.py's
+    fetch_fx_rate(), invoked from the service layer) since this module
+    doesn't make network calls. Facts already in USD (or any other
+    currency that isn't `from_currency`) are left untouched, so calling
+    this on a mixed or already-USD statement list is a safe no-op for
+    those facts rather than a silent double-conversion.
+    """
+
+    def _convert(fact: FinancialFact | None) -> FinancialFact | None:
+        if fact is None or fact.unit != from_currency:
+            return fact
+        return fact.model_copy(update={"value": fact.value * rate, "unit": "USD"})
+
+    converted = []
+    for statement in statements:
+        updates = {metric: _convert(getattr(statement, metric)) for metric in CONCEPT_CANDIDATES}
+        updates["restated_facts"] = [_convert(fact) for fact in statement.restated_facts]
+        converted.append(statement.model_copy(update=updates))
+    return converted

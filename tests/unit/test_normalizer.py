@@ -1,7 +1,12 @@
 import pytest
 
 from app.data.models import ValuationCategory
-from app.financials.normalizer import classify_company, normalize
+from app.financials.normalizer import (
+    classify_company,
+    convert_statements_to_usd,
+    normalize,
+    statement_currency,
+)
 
 SUBMISSIONS_STANDARD = {
     "tickers": ["TST"],
@@ -746,3 +751,154 @@ def test_shares_outstanding_prefers_point_in_time_tag_over_weighted_average():
     assert statement.shares_outstanding.value == 1000000000
     assert statement.shares_outstanding.xbrl_tag == "CommonStockSharesOutstanding"
     assert not any("derived from" in w for w in statement.warnings)
+
+
+def _nvo_ifrs_facts() -> dict:
+    # Reproduces Novo Nordisk's real FY2025 20-F figures (all in DKK,
+    # verified live against the real filing - e.g. net income 102,434
+    # matches Novo Nordisk's actual reported 2025 profit).
+    entries = {
+        "Revenue": [_entry(309064000000, "2025-12-31", fy=2025, form="20-F",
+                            filed="2026-02-04", accn="NVO-2025", start="2025-01-01")],
+        "ProfitLossFromOperatingActivities": [
+            _entry(127658000000, "2025-12-31", fy=2025, form="20-F",
+                   filed="2026-02-04", accn="NVO-2025", start="2025-01-01"),
+        ],
+        "ProfitLoss": [_entry(102434000000, "2025-12-31", fy=2025, form="20-F",
+                               filed="2026-02-04", accn="NVO-2025", start="2025-01-01")],
+        "CashFlowsFromUsedInOperatingActivities": [
+            _entry(119102000000, "2025-12-31", fy=2025, form="20-F",
+                   filed="2026-02-04", accn="NVO-2025", start="2025-01-01"),
+        ],
+        "DepreciationAndAmortisationExpense": [
+            _entry(14666000000, "2025-12-31", fy=2025, form="20-F",
+                   filed="2026-02-04", accn="NVO-2025", start="2025-01-01"),
+        ],
+        "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities": [
+            _entry(60140000000, "2025-12-31", fy=2025, form="20-F",
+                   filed="2026-02-04", accn="NVO-2025", start="2025-01-01"),
+        ],
+        "InterestExpense": [_entry(4207000000, "2025-12-31", fy=2025, form="20-F",
+                                    filed="2026-02-04", accn="NVO-2025", start="2025-01-01")],
+    }
+    instant_entries = {
+        "CurrentAssets": [_entry(172453000000, "2025-12-31", fy=2025, form="20-F",
+                                  filed="2026-02-04", accn="NVO-2025")],
+        "CurrentLiabilities": [_entry(215661000000, "2025-12-31", fy=2025, form="20-F",
+                                       filed="2026-02-04", accn="NVO-2025")],
+        "CashAndCashEquivalents": [_entry(26464000000, "2025-12-31", fy=2025, form="20-F",
+                                           filed="2026-02-04", accn="NVO-2025")],
+        "ShorttermBorrowings": [_entry(12017000000, "2025-12-31", fy=2025, form="20-F",
+                                        filed="2026-02-04", accn="NVO-2025")],
+        "LongtermBorrowings": [_entry(118941000000, "2025-12-31", fy=2025, form="20-F",
+                                       filed="2026-02-04", accn="NVO-2025")],
+        "Equity": [_entry(194047000000, "2025-12-31", fy=2025, form="20-F",
+                           filed="2026-02-04", accn="NVO-2025")],
+    }
+    share_entries = {
+        "NumberOfSharesOutstanding": [_entry(4444000000, "2025-12-31", fy=2025, form="20-F",
+                                              filed="2026-02-04", accn="NVO-2025")],
+    }
+    return {
+        "cik": 9,
+        "entityName": "NVO-like",
+        "facts": {
+            "ifrs-full": {
+                **_facts(entries, taxonomy="ifrs-full", unit="DKK")["facts"]["ifrs-full"],
+                **_facts(instant_entries, taxonomy="ifrs-full", unit="DKK")["facts"]["ifrs-full"],
+                **_facts(share_entries, taxonomy="ifrs-full", unit="shares")["facts"]["ifrs-full"],
+            }
+        },
+    }
+
+
+def test_normalize_ifrs_filer_reproduces_nvo_case():
+    [statement] = normalize(_nvo_ifrs_facts(), SUBMISSIONS_STANDARD)
+
+    assert statement.revenue.value == 309064000000
+    assert statement.revenue.unit == "DKK"
+    assert statement.operating_income.value == 127658000000
+    assert statement.net_income.value == 102434000000
+    assert statement.operating_cash_flow.value == 119102000000
+    assert statement.depreciation_amortization.value == 14666000000
+    assert statement.capex.value == 60140000000
+    assert statement.current_assets.value == 172453000000
+    assert statement.current_liabilities.value == 215661000000
+    assert statement.cash.value == 26464000000
+    assert statement.short_term_debt.value == 12017000000
+    assert statement.long_term_debt.value == 118941000000
+    assert statement.stockholders_equity.value == 194047000000
+    assert statement.shares_outstanding.value == 4444000000
+    assert statement.shares_outstanding.unit == "shares"
+    assert statement.interest_expense.value == 4207000000
+    assert not any("no standard tag found" in w for w in statement.warnings)
+
+
+def test_normalize_ifrs_filer_missing_operating_income_stays_none_no_gaap_derivation():
+    facts = _nvo_ifrs_facts()
+    del facts["facts"]["ifrs-full"]["ProfitLossFromOperatingActivities"]
+
+    [statement] = normalize(facts, SUBMISSIONS_STANDARD)
+
+    assert statement.operating_income is None
+    assert "operating_income: no standard tag found for 2025-12-31" in statement.warnings
+    assert not any("derived from pretax income" in w for w in statement.warnings)
+
+
+def test_normalize_prefers_us_gaap_over_ifrs_when_both_present():
+    facts = _nvo_ifrs_facts()
+    gaap = _facts(
+        {
+            "Revenues": [_entry(999000000, "2025-12-31", fy=2025, filed="2026-02-04",
+                                 accn="GAAP-2025", start="2025-01-01")],
+            "NetIncomeLoss": [_entry(111000000, "2025-12-31", fy=2025, filed="2026-02-04",
+                                      accn="GAAP-2025", start="2025-01-01")],
+        }
+    )["facts"]["us-gaap"]
+    facts["facts"]["us-gaap"] = gaap
+
+    [statement] = normalize(facts, SUBMISSIONS_STANDARD)
+
+    assert statement.revenue.value == 999000000
+    assert statement.revenue.unit == "USD"
+    assert statement.revenue.taxonomy == "us-gaap"
+
+
+def test_statement_currency_reads_ifrs_reporting_currency():
+    [statement] = normalize(_nvo_ifrs_facts(), SUBMISSIONS_STANDARD)
+
+    assert statement_currency(statement) == "DKK"
+
+
+def test_convert_statements_to_usd_converts_monetary_facts_not_shares():
+    [statement] = normalize(_nvo_ifrs_facts(), SUBMISSIONS_STANDARD)
+
+    [converted] = convert_statements_to_usd([statement], rate=0.156, from_currency="DKK")
+
+    assert converted.revenue.value == pytest.approx(309064000000 * 0.156)
+    assert converted.revenue.unit == "USD"
+    assert converted.net_income.value == pytest.approx(102434000000 * 0.156)
+    # Share count is currency-agnostic - untouched by the DKK->USD rate.
+    assert converted.shares_outstanding.value == 4444000000
+    assert converted.shares_outstanding.unit == "shares"
+
+
+def test_convert_statements_to_usd_is_a_noop_for_already_usd_facts():
+    company_facts = {
+        "cik": 10,
+        "entityName": "USD-only",
+        **_facts(
+            {
+                "Revenues": [_entry(1000000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                                     accn="A-2025", start="2025-01-01")],
+                "NetIncomeLoss": [_entry(200000000, "2025-12-31", fy=2025, filed="2026-02-01",
+                                          accn="A-2025", start="2025-01-01")],
+            }
+        ),
+    }
+    [statement] = normalize(company_facts, SUBMISSIONS_STANDARD)
+
+    [converted] = convert_statements_to_usd([statement], rate=0.156, from_currency="DKK")
+
+    assert converted.revenue.value == 1000000000
+    assert converted.revenue.unit == "USD"

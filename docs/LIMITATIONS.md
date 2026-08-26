@@ -8,13 +8,18 @@ as a starting point for analysis, not a verdict. Grouped by layer.
 - **SEC EDGAR is the only data source for every company *financial*
   fact.** No cross-validation against another provider - if SEC's own
   XBRL tagging is wrong for a company, this system reproduces that
-  error. Two reference-only estimates reach outside SEC EDGAR for
-  non-financial-statement data: `compute_wacc`'s risk-free rate (FRED -
-  a macro/government figure with no company-specific counterpart in SEC
-  filings by definition) and `compute_comps`'s peer current prices
-  (Yahoo Finance - a live trading price, likewise not something a
-  filing reports). Neither ever touches `margin_of_safety` itself - see
-  VALUATION_METHOD.md's WACC and Comps sections.
+  error. Three reference-only/support estimates reach outside SEC EDGAR
+  for non-financial-statement data: `compute_wacc`'s risk-free rate
+  (FRED - a macro/government figure with no company-specific
+  counterpart in SEC filings by definition), `compute_comps`'s peer
+  current prices (Yahoo Finance - a live trading price, likewise not
+  something a filing reports), and an IFRS/20-F filer's currency
+  conversion (also Yahoo Finance, an FX spot rate - see the
+  Normalization layer section below). The first two never touch
+  `margin_of_safety` itself - see VALUATION_METHOD.md's WACC and Comps
+  sections - but currency conversion does, by design: it has to run
+  before margin_of_safety for a non-USD filer's numbers to be
+  USD-comparable at all.
 - **Custom-taxonomy XBRL is not parsed.** `companyfacts` only
   aggregates standard taxonomies (`us-gaap`, `dei`, `ifrs-full`,
   `srt`). If a company reports an important figure only under a
@@ -115,6 +120,38 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   available either - no shares-outstanding-shaped tag exists under any
   namespace for it, a genuine data gap rather than a naming mismatch.
   See [DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V8.
+- **IFRS/20-F support is verified against exactly one company (NVO,
+  Novo Nordisk) - not assumed to generalize.** `IFRS_CONCEPT_CANDIDATES`
+  has zero multi-candidate fallback chains (unlike the us-gaap side,
+  where tag migrations are common and expected); a second IFRS filer
+  using a different concept name for the same line item would just come
+  back as a missing metric with a warning, not silently guessed at.
+  Three US-GAAP-only selection strategies (short_term_debt's
+  additive-tags handling, operating_income derivation,
+  shares_outstanding's weighted-average fallback) were deliberately
+  **not** ported to the IFRS path for the same reason - NVO tags all
+  three directly so none of them were needed, and generalizing an
+  unverified fallback risks the same kind of near-regression already
+  caught once for a us-gaap company (finding #6, JPM). `capex` for IFRS
+  filers is PP&E purchases only, same scope as the us-gaap capex
+  candidates - NVO also reports a separate, sometimes-large
+  `PurchaseOfIntangibleAssets` line (DKK 30bn in FY2025, 7x the prior
+  year) that isn't included, since whether it's recurring reinvestment
+  or a one-off (licensing, M&A) hasn't been verified. See
+  [DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V9.
+- **Currency conversion uses a live spot rate fetched at request time,
+  not the rate on each fact's own filing date.** An IFRS filer's
+  multi-year statements (e.g. FY2023-2025) are all converted at
+  *today's* DKK->USD rate, not the rate that applied when each fact was
+  actually reported - so year-over-year USD figures partly reflect FX
+  movement, not just the underlying business. This is the same
+  simplification real screener tools make by default, but it's not
+  disclosed anywhere except the `warnings` field's conversion notice.
+  Also depends on Yahoo Finance's FX-pair pricing (`"DKKUSD=X"`-style
+  tickers via the same unofficial chart API `wacc.py`/`comps.py` already
+  depend on for peer prices - see the Data layer section above) - no
+  independent verification that every currency pair Yahoo could be
+  asked for is actually priced there, only that DKK/USD is.
 
 ## Financial-metrics layer
 

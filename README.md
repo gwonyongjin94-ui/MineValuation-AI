@@ -177,6 +177,24 @@ Lowe's) 그런 경우 "low-confidence sample" 경고가 붙는다 - 계산 자�
 "Comps layer", 계산식은 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)의
 "5. Comps" 참고.
 
+### 20-F(IFRS) 외국계 발행사 지원 - NVO(Novo Nordisk) 등
+
+```bash
+python scripts/analyze.py NVO 48.69
+```
+미국 국내 상장사(10-K)뿐 아니라 20-F를 제출하는 외국계 발행사(예:
+덴마크 회사 Novo Nordisk)도 별도 옵션 없이 자동으로 지원된다. IFRS
+태그 매핑(`ifrs-full` 네임스페이스)으로 재무제표를 읽고, 회사가 보고하는
+현지 통화(NVO는 DKK)를 실시간 환율(Yahoo Finance)로 USD 변환한 뒤
+DCF/Owner Earnings/Comps 전부 그대로 계산한다 - `market_price`가 항상
+USD로 취급되기 때문에 변환 없이는 결과가 6~7배씩 어긋난다. 현재
+NVO 하나로만 실데이터 검증됐고, 다른 20-F 발행사에서 같은 IFRS 태그가
+그대로 쓰이는지는 확인 전이라 태그가 안 맞으면 해당 항목만 `None`+경고로
+빠진다(추측해서 채우지 않음). 한계는
+[LIMITATIONS.md](docs/LIMITATIONS.md), 계산식은
+[VALUATION_METHOD.md](docs/VALUATION_METHOD.md)의 "8. IFRS / non-USD
+filers" 참고.
+
 ## 테스트
 
 ```bash

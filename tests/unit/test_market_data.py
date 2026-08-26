@@ -1,7 +1,12 @@
 import httpx
 import pytest
 
-from app.data.market_data import MarketDataError, fetch_current_price, fetch_risk_free_rate
+from app.data.market_data import (
+    MarketDataError,
+    fetch_current_price,
+    fetch_fx_rate,
+    fetch_risk_free_rate,
+)
 
 
 def _client(response_text: str, status_code: int = 200) -> httpx.Client:
@@ -71,3 +76,32 @@ def test_fetch_current_price_raises_when_price_missing():
     body = {"chart": {"result": [{"meta": {}}]}}
     with pytest.raises(MarketDataError):
         fetch_current_price("AAPL", _json_client(body))
+
+
+def test_fetch_fx_rate_same_currency_short_circuits_without_a_request():
+    # No HTTP call needed for USD->USD - passing a client that would
+    # error if actually hit proves the short-circuit happens first.
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("should not make an HTTP request for same-currency conversion")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    assert fetch_fx_rate("USD", "USD", client) == 1.0
+
+
+def test_fetch_fx_rate_builds_the_yahoo_pair_ticker():
+    # DKK->USD reproduces the real Novo Nordisk (NVO) case - checked live
+    # that Yahoo's chart API accepts "DKKUSD=X" as an ordinary ticker.
+    seen_urls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        body = {"chart": {"result": [{"meta": {"regularMarketPrice": 0.156}}]}}
+        return httpx.Response(200, json=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    rate = fetch_fx_rate("DKK", "USD", client)
+
+    assert rate == pytest.approx(0.156)
+    assert "DKKUSD=X" in seen_urls[0]

@@ -1,8 +1,10 @@
 """External (non-SEC) market data: the risk-free rate from FRED
-(app/valuation/wacc.py) and peer current prices for comps
-(app/valuation/comps.py) - the only two things this app needs that
-cannot come from a company's own SEC filings by definition (a Treasury
-yield and another company's live trading price).
+(app/valuation/wacc.py), peer current prices for comps
+(app/valuation/comps.py), and FX rates for IFRS foreign private issuers
+that report in a non-USD currency (app/financials/normalizer.py's
+convert_statements_to_usd()) - things this app needs that cannot come
+from a company's own SEC filings by definition (a Treasury yield,
+another company's live trading price, a currency's exchange rate).
 """
 
 import httpx
@@ -71,6 +73,20 @@ def fetch_current_price(ticker: str, client: httpx.Client) -> float:
     if not isinstance(price, int | float):
         raise MarketDataError(f"Yahoo Finance returned no usable price for {ticker}")
     return float(price)
+
+
+def fetch_fx_rate(from_currency: str, to_currency: str, client: httpx.Client) -> float:
+    """Live spot rate to convert one unit of `from_currency` into
+    `to_currency`.
+
+    Reuses fetch_current_price() rather than a separate HTTP path - Yahoo
+    Finance prices FX pairs as ordinary tickers ("DKKUSD=X"), verified
+    live to return a plausible real DKK->USD rate through the exact same
+    chart-API endpoint this module already uses for equities.
+    """
+    if from_currency == to_currency:
+        return 1.0
+    return fetch_current_price(f"{from_currency}{to_currency}=X", client)
 
 
 def build_default_market_data_client() -> httpx.Client:

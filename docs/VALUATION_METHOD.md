@@ -508,6 +508,48 @@ Overlap                     ├─┤
                             $261~$264
 ```
 
+## 8. IFRS / non-USD filers (`app/financials/normalizer.py`, `app/data/market_data.py`)
+
+Everything above assumes a US domestic filer reporting under US-GAAP in
+a 10-K/10-K/A, in USD. A foreign private issuer (e.g. Novo Nordisk/NVO,
+a Danish company) instead files Form **20-F**, reporting under **IFRS**,
+in its home currency. Checked live: NVO has zero `us-gaap` facts, only
+`ifrs-full` (253 tags) - so supporting it needs three separate things,
+all handled automatically with no extra request parameter:
+
+1. **Taxonomy detection.** `_detect_taxonomy()` checks whether a
+   company's raw companyfacts JSON has any `us-gaap` facts (existing
+   GAAP path, unchanged) or only `ifrs-full` facts (new IFRS path,
+   `IFRS_CONCEPT_CANDIDATES`, forms `20-F`/`20-F/A` instead of
+   `10-K`/`10-K/A`). Every IFRS tag was verified against NVO's real
+   FY2025 20-F figures - see
+   [DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V9. Three US-GAAP-only
+   selection strategies (short_term_debt's additive-tags handling,
+   operating_income derivation, shares_outstanding's weighted-average
+   fallback) deliberately have no IFRS equivalent yet - they're each
+   verified against only one company (NVO doesn't need any of them, it
+   tags all three directly), and generalizing an unverified fallback to
+   a second company risks repeating the JPM near-regression from
+   finding #6.
+2. **Currency conversion.** `market_price` is always assumed USD (how a
+   US-listed ticker is quoted). `app/data/market_data.py`'s
+   `fetch_fx_rate()` gets a live spot rate from Yahoo Finance - reusing
+   `fetch_current_price()` unchanged, since Yahoo prices FX pairs as
+   ordinary tickers (`"DKKUSD=X"`). `app/financials/normalizer.py`'s
+   `convert_statements_to_usd()` then converts every monetary
+   `FinancialFact` (not `shares_outstanding` - a count, not a currency
+   amount) to USD.
+3. **Where the conversion happens.** `normalize()` itself stays
+   offline/pure - no network calls, same as always. `analyze()` calls it
+   once, immediately after `normalize()` and before anything else reads
+   `statements` (growth estimate, WACC, comps, FCFF/DCF, Owner
+   Earnings). Every one of those modules is unmodified - they just see
+   already-USD figures, with no currency-awareness of their own. If
+   conversion is needed but `market_data_client` is `None`, `analyze()`
+   raises `MarketDataError` rather than silently computing a
+   USD-labeled number that's actually still denominated in DKK - see
+   [LIMITATIONS.md](LIMITATIONS.md).
+
 ## Defaults at the API boundary
 
 `app/api/analysis.py` defines `DEFAULT_ASSUMPTIONS` (5% FCFF growth,

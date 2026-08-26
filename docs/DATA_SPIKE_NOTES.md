@@ -568,3 +568,73 @@ $11.9528/주 — MCD의 실제 공시 희석 EPS $11.95와 정확히 일치, 확
 근본 원인이 사실상 다 규명됨 — operating_income 역산(V7) + 이번
 shares_outstanding 역산(V8) 두 건이 DJIA 30종목 표에서 관찰됐던 공백의
 대부분을 설명한다.
+
+## V9 — 20-F(IFRS) 외국계 발행사 지원: NVO(Novo Nordisk)로 실데이터 검증
+
+사용자가 NVO(덴마크 회사, 뉴욕증시 ADR)를 넣었더니 "no financial
+statements filed"로 완전히 막혔다. 원인을 실데이터로 바로 확인: NVO는
+연차보고서를 `10-K`가 아니라 **`20-F`**로 제출한다(외국계 민간발행사,
+foreign private issuer). 이 프로젝트의 `ANNUAL_FORMS = ("10-K",
+"10-K/A")` 필터가 20-F를 아예 인식하지 못해서 회계연도 자체가 하나도
+발견되지 않았던 것.
+
+**단순히 폼 타입만 바꾸면 되는 문제가 아니었다.** NVO의 실제
+companyfacts를 열어보니 `us-gaap` 네임스페이스 태그가 **0개**였다 —
+전부 `ifrs-full`(IFRS) 네임스페이스(253개 태그)였다. 즉 CONCEPT_CANDIDATES
+전체가 US-GAAP 태그 이름 기준이라 20-F 필터만 고쳐도 아무 값도 안
+잡혔을 것. 그래서 완전히 별도의 `IFRS_CONCEPT_CANDIDATES` 매핑 테이블을
+만들고, `_detect_taxonomy()`로 `facts_ns`에 `us-gaap`이 있으면 GAAP
+경로, `ifrs-full`만 있으면 IFRS 경로로 분기하도록 정규화 로직을 확장했다.
+
+**IFRS 태그는 실제 NVO 2025 회계연도 숫자와 정확히 대조해서 확정**:
+Revenue(매출) 309,064백만 DKK, ProfitLossFromOperatingActivities(영업이익)
+127,658백만 DKK, ProfitLoss(순이익) 102,434백만 DKK 등 전부 실제 20-F에
+보고된 수치와 일치 확인. capex는 us-gaap과 동일하게 PP&E 매입분만
+사용(`PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities`)
+- NVO는 별도로 `PurchaseOfIntangibleAssets`(2025년 DKK 300억, 전년
+대비 7배 급증)라는 큰 항목도 있지만, 이게 경상적 재투자인지 일회성
+라이선싱/M&A인지 검증이 안 돼서 의도적으로 합산에서 뺐다 - 이번
+세션 내내 지켜온 "검증 안 된 건 추측해서 합치지 않는다" 원칙 그대로
+적용.
+
+**US-GAAP 전용 3개 특수 로직(short_term_debt 합산, operating_income
+역산, shares_outstanding 가중평균 폴백)은 IFRS 경로에 그대로 옮기지
+않았다** - 전부 NVO 하나로만 검증된 것들이라, 다른 IFRS 발행사에서
+같은 패턴이 재현되는지 확인 안 된 채로 일반화하면 이전에 봤던
+JPM 회귀 버그(V7)와 같은 실수를 반복하게 된다. 대신 NVO는 이 세
+필드를 전부 직접 태그로 갖고 있어서(`ShorttermBorrowings`,
+`ProfitLossFromOperatingActivities`, `NumberOfSharesOutstanding`)
+폴백 자체가 필요 없었다.
+
+**통화 문제 - DKK 그대로 두면 결과가 완전히 틀어진다.** NVO의 모든
+금액은 DKK로 보고되는데, 사용자가 입력하는 시장가는 USD다. 그대로
+나누면 주당가치가 실제보다 약 6.4배 부풀려진다. 실시간 환율이
+필요했는데, 별도 HTTP 로직을 새로 만들지 않고 이미 있던
+`fetch_current_price()`(Yahoo Finance chart API)를 그대로 재사용했다
+- Yahoo는 통화쌍도 일반 티커처럼 취급해서 `"DKKUSD=X"`를 그대로
+받아준다는 걸 실제로 호출해서 확인(0.156 반환, 실제 DKK/USD 환율과
+합리적으로 일치). `app/financials/normalizer.py`는 원래 네트워크
+호출이 전혀 없는 순수 함수라서(offline 설계), 환율 변환은 `normalize()`
+안이 아니라 `analyze()`에서 `normalize()` 직후, DCF/WACC/Comps/Owner
+Earnings 등 어떤 계산도 시작하기 전에 한 번만 적용한다 - 이러면
+아래 모든 소비자가 전혀 통화를 신경 쓸 필요 없이 이미 USD로 변환된
+값을 읽게 된다(wacc.py/comps.py/owner_earnings.py/dcf.py 전부 무수정).
+
+**변환 검증**: MCD 사례(V8)와 똑같은 방식으로 확인 - 변환된 순이익을
+발행주식수로 나눈 값이 실제 공개된 수치와 맞아떨어지는지 체크. NVO는
+정확한 EPS 대신 최종 `intrinsic_value_per_share = $40.37`(범위
+$31~58)이 시장가 $48.69와 합리적인 스케일로 나옴(6~7배씩 어긋나지
+않음)으로 검증. Comps($72~93, 미국 제약 동종업계 배수 적용)까지 세
+방법 전부 정상 작동하지만 서로 안 겹쳐서(overlap 없음) "no overlap"
+경고가 뜨는 것도 확인 - 이 프로젝트의 기존 설계(방법들이 진짜 의견이
+갈리면 억지로 합치지 않고 그대로 노출)가 외국계 발행사에도 그대로
+적용됨.
+
+**시장데이터 클라이언트 필수화**: 통화 변환이 필요한데
+`market_data_client`가 없으면(직접 `analyze()`를 호출하는 테스트/스크립트
+등에서) 잘못된 통화로 조용히 계산을 진행하는 대신 `MarketDataError`를
+바로 던지도록 했다 - WACC/Comps 옵트인 시 이미 쓰던 것과 같은
+"명시적으로 실패, 조용히 틀린 값 내지 않기" 패턴. 실제로는 CLI
+(`scripts/analyze.py`)와 API(`app/api/analysis.py`) 둘 다 이미 항상
+`market_data_client`를 만들어서 넘기고 있어서, 이 경로가 실제로 막히는
+건 그 클라이언트를 안 넘기는 직접 프로그래매틱 호출/테스트뿐이다.
