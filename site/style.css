@@ -193,7 +193,7 @@ textarea {
   bottom: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  width: 220px;
+  width: 280px;
   background: var(--text);
   color: #fff;
   font-size: 0.75rem;
