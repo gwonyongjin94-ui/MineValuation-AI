@@ -121,6 +121,14 @@ textarea:focus {
   border-color: var(--accent);
 }
 
+/* Ticker/price are typed into constantly - the barcode band made room
+   for typing cramped and was more decoration than the form needed on
+   the two fields people actually use every time. */
+.no-barcode {
+  background-image: none;
+  padding: 10px 12px;
+}
+
 textarea {
   font-family: var(--mono);
   font-size: 0.85rem;
@@ -154,6 +162,73 @@ textarea {
 
 .checkbox input {
   margin: 0;
+}
+
+.info-tooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid var(--text-dim);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+}
+
+.info-tooltip:hover,
+.info-tooltip:focus {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+
+.info-tooltip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 220px;
+  background: var(--text);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.4;
+  padding: 8px 10px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.info-tooltip::before {
+  content: "";
+  position: absolute;
+  bottom: calc(100% + 3px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--text);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  z-index: 10;
+}
+
+.info-tooltip:hover::after,
+.info-tooltip:hover::before,
+.info-tooltip:focus::after,
+.info-tooltip:focus::before {
+  opacity: 1;
+  visibility: visible;
 }
 
 .link-button {
