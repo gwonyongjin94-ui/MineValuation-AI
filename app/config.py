@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     # configured there) doesn't break when no qualitative-analysis
     # feature actually needs it yet - checked at the point of use instead.
     anthropic_api_key: str | None = None
+    # Comma-separated extra CORS origins for the GitHub Pages frontend
+    # (docs/) - e.g. "https://<user>.github.io". Empty by default so a
+    # bare API deployment (no frontend configured yet) doesn't need this
+    # set; app/main.py always allows localhost regardless.
+    allowed_origins: str = ""
 
     model_config = SettingsConfigDict(env_file=_ENV_FILE, extra="ignore")
 

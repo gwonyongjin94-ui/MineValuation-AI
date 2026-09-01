@@ -1,0 +1,23 @@
+# Render.com blueprint (https://render.com/docs/blueprint-spec) - lets
+# Render auto-detect this file and offer a one-click deploy of the API
+# (New > Blueprint, point it at this repo). Not the only way to deploy
+# this app (see Dockerfile for a portable alternative on Railway/Fly.io/
+# elsewhere) - just the path with the least manual setup for a first
+# deploy. SEC_USER_AGENT and ALLOWED_ORIGINS must be set as real values
+# in the Render dashboard after the blueprint creates the service -
+# `sync: false` means Render prompts for them rather than committing
+# secrets/config into this file.
+services:
+  - type: web
+    name: minevaluation-ai-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -e .
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false

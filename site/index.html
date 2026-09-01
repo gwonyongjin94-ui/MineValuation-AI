@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MineValuation-AI</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="page-header">
+    <h1>MineValuation-AI</h1>
+    <p class="tagline">SEC EDGAR 실데이터 기반 FCFF/DCF 내재가치 &amp; 안전마진 계산기</p>
+  </header>
+
+  <main>
+    <section class="panel" id="config-panel">
+      <button type="button" id="config-toggle" class="link-button" aria-expanded="false">
+        ⚙ 설정 (API 서버 주소)
+      </button>
+      <div id="config-body" hidden>
+        <label for="api-base-url">백엔드 API 주소</label>
+        <input
+          type="url"
+          id="api-base-url"
+          placeholder="https://your-api.onrender.com"
+        />
+        <p class="hint">
+          이 사이트는 정적 페이지라 직접 SEC/Yahoo 데이터를 못 가져옵니다 - 실제 계산을 돌리는
+          FastAPI 서버 주소를 넣어야 합니다. 로컬에서 <code>uvicorn app.main:app</code>을 띄웠다면
+          <code>http://localhost:8000</code>. 브라우저에만 저장되고 서버로는 전송되지 않습니다.
+        </p>
+      </div>
+    </section>
+
+    <section class="panel" id="form-panel">
+      <form id="analyze-form">
+        <div class="row">
+          <div class="field">
+            <label for="ticker">티커</label>
+            <input type="text" id="ticker" placeholder="AAPL" required autocomplete="off" />
+          </div>
+          <div class="field">
+            <label for="price">현재가 (USD)</label>
+            <input type="number" id="price" placeholder="230" step="0.01" min="0.01" required />
+          </div>
+        </div>
+
+        <div class="row toggles">
+          <label class="checkbox"><input type="checkbox" id="compute-wacc" checked /> WACC 참고치</label>
+          <label class="checkbox"><input type="checkbox" id="compute-comps" checked /> Comps 참고치</label>
+        </div>
+
+        <button type="button" id="qual-toggle" class="link-button" aria-expanded="false">
+          + 정성분석 (10-K / 어닝콜, Anthropic API 키 필요, 실제 비용 발생)
+        </button>
+        <div id="qual-body" hidden>
+          <label class="checkbox"><input type="checkbox" id="analyze-10k" /> 최신 10-K 리스크 추출</label>
+          <label for="anthropic-key">Anthropic API 키 (본인 키, 서버에 저장되지 않음)</label>
+          <input type="password" id="anthropic-key" placeholder="sk-ant-..." autocomplete="off" />
+          <label for="earnings-call">어닝콜 텍스트 (선택)</label>
+          <textarea id="earnings-call" rows="6" placeholder="어닝콜 트랜스크립트를 붙여넣으세요"></textarea>
+        </div>
+
+        <button type="submit" id="submit-btn">분석</button>
+      </form>
+      <p id="status" role="status"></p>
+    </section>
+
+    <section class="panel" id="results" hidden></section>
+  </main>
+
+  <footer>
+    <p>
+      참고용 계산 도구입니다 - 투자 조언이 아닙니다.
+      <a href="https://github.com/gwonyongjin94-ui/MineValuation-AI" target="_blank" rel="noopener">GitHub</a>
+    </p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

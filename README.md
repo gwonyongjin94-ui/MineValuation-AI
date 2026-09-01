@@ -195,6 +195,53 @@ NVO 하나로만 실데이터 검증됐고, 다른 20-F 발행사에서 같은 I
 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)의 "8. IFRS / non-USD
 filers" 참고.
 
+## 웹 UI (`site/`)
+
+터미널/curl 대신 브라우저에서 티커·가격을 넣고 결과를 보는 정적 프론트엔드.
+`site/index.html` + `style.css` + `app.js`뿐이고 빌드 과정이 없다 - 이
+API를 그대로 호출하는 얇은 클라이언트라서, 실제 계산은 어딘가에 떠 있는
+이 FastAPI 서버가 한다(정적 페이지 자체는 SEC/Yahoo에 직접 접근 못 함).
+
+### 로컬에서 써보기
+
+```bash
+# 터미널 1 - API 서버
+uvicorn app.main:app --reload --port 8000
+
+# 터미널 2 - 정적 페이지 서버
+python3 -m http.server 8080 --directory site
+```
+브라우저로 `http://localhost:8080` 접속 → 설정에서 백엔드 API 주소에
+`http://localhost:8000` 입력 → 티커/가격 넣고 분석. `app/main.py`가
+`localhost:8000`/`localhost:8080` 조합은 이미 항상 CORS 허용해둬서 별도
+설정 불필요.
+
+### GitHub Pages로 배포하기
+
+이 저장소는 `main`에 `site/**`가 바뀔 때마다 `.github/workflows/pages.yml`이
+자동으로 GitHub Pages에 배포하도록 이미 설정돼 있다. 저장소 Settings →
+Pages → Source를 **"GitHub Actions"**로 한 번만 바꿔주면 그 다음부터는
+push할 때마다 `https://<username>.github.io/<repo>/`에 자동 반영된다.
+
+단, GitHub Pages는 정적 파일만 서빙해서 FastAPI 서버 자체는 못 돌린다 -
+API를 실제로 부를 수 있는 곳에 별도 배포해야 사이트가 동작한다:
+
+```bash
+# Render.com - 이 저장소의 render.yaml을 그대로 인식해서 원클릭 배포
+# (Render 대시보드 → New → Blueprint → 이 저장소 선택)
+
+# 또는 Dockerfile로 Railway/Fly.io 등 다른 곳에 배포
+docker build -t minevaluation-ai .
+docker run -p 8000:8000 -e SEC_USER_AGENT="..." minevaluation-ai
+```
+어느 쪽이든 배포 후 실제 API 서버 URL이 나오면(예:
+`https://minevaluation-ai-api.onrender.com`), 그 서버의 환경변수
+`ALLOWED_ORIGINS`에 `https://<username>.github.io`를 넣어야
+브라우저에서 CORS 없이 호출된다 - `.env.example` 참고. `ANTHROPIC_API_KEY`는
+서버에 안 넣어도 된다: 정성분석은 방문자가 자기 키를 직접 입력해서
+쓰는 방식이라(위 "개인 Anthropic 키로 호출하기" 참고), 공개 서버가
+LLM 비용을 대신 지불하지 않는다.
+
 ## 테스트
 
 ```bash
