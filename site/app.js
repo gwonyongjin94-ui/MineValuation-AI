@@ -120,18 +120,47 @@ function renderRangeChart(ranges) {
     bar.setAttribute("class", r.method === "Overlap" ? "bar overlap" : "bar");
     svg.appendChild(bar);
 
-    const lowLabel = document.createElementNS(svg.namespaceURI, "text");
-    lowLabel.setAttribute("x", x1);
-    lowLabel.setAttribute("y", y + 36);
-    lowLabel.textContent = money(r.low);
-    svg.appendChild(lowLabel);
+    // Same problem scripts/analyze.py's ASCII chart hit (see
+    // format_range_chart's "$2$264" bug) - a narrow bar (the Overlap
+    // row especially) puts the low/high labels close enough to
+    // collide. No live layout to measure against here, so this
+    // estimates rendered width from character count (~7px/char at the
+    // chart's 12px monospace) rather than doing a DOM-measure pass,
+    // and merges into one "$low~$high" label when they'd overlap.
+    const lowText = money(r.low);
+    const highText = money(r.high);
+    const estWidth = (s) => s.length * 7 + 2;
+    const gap = x2 - x1;
 
-    const highLabel = document.createElementNS(svg.namespaceURI, "text");
-    highLabel.setAttribute("x", x2);
-    highLabel.setAttribute("y", y + 36);
-    highLabel.setAttribute("text-anchor", "end");
-    highLabel.textContent = money(r.high);
-    svg.appendChild(highLabel);
+    if (gap < estWidth(lowText) + estWidth(highText) + 8) {
+      const mergedLabel = document.createElementNS(svg.namespaceURI, "text");
+      const mergedText = `${lowText}~${highText}`;
+      // Anchor at the bar's midpoint and center the text there, but
+      // clamp so it never starts left of the label column or runs past
+      // the chart's right edge - a merged label is usually wider than
+      // the bar itself, unlike the two separate labels it replaces.
+      const mid = (x1 + x2) / 2;
+      const half = estWidth(mergedText) / 2;
+      const clampedX = Math.min(Math.max(mid, labelWidth + half), width - half);
+      mergedLabel.setAttribute("x", clampedX);
+      mergedLabel.setAttribute("y", y + 36);
+      mergedLabel.setAttribute("text-anchor", "middle");
+      mergedLabel.textContent = mergedText;
+      svg.appendChild(mergedLabel);
+    } else {
+      const lowLabel = document.createElementNS(svg.namespaceURI, "text");
+      lowLabel.setAttribute("x", x1);
+      lowLabel.setAttribute("y", y + 36);
+      lowLabel.textContent = lowText;
+      svg.appendChild(lowLabel);
+
+      const highLabel = document.createElementNS(svg.namespaceURI, "text");
+      highLabel.setAttribute("x", x2);
+      highLabel.setAttribute("y", y + 36);
+      highLabel.setAttribute("text-anchor", "end");
+      highLabel.textContent = highText;
+      svg.appendChild(highLabel);
+    }
   });
 
   return svg;
