@@ -62,16 +62,26 @@ def compute_terminal_value(
     return final_year_fcff * (1 + terminal_growth_rate) / (discount_rate - terminal_growth_rate)
 
 
-def run_dcf(
-    statement: FinancialStatement, base_fcff: float, assumptions: ValuationAssumptions
+def run_dcf_from_projection(
+    statement: FinancialStatement,
+    base_fcff: float,
+    projected: list[float],
+    assumptions: ValuationAssumptions,
 ) -> DCFResult:
-    projected = project_fcff(base_fcff, assumptions.fcff_growth_rate, assumptions.forecast_years)
+    """Discounting, terminal value, and the equity-value bridge - the part
+    of a DCF that's identical no matter how the projected cash-flow
+    series was built. run_dcf() (flat growth) and
+    app/valuation/h_model.py's run_h_model_dcf() (linearly fading
+    growth, per Fuller & Hsia 1984) both call this shared core rather
+    than each reimplementing the bridge - only the growth path differs
+    between them.
+    """
     discounted = discount_cash_flows(projected, assumptions.discount_rate)
 
     tv = compute_terminal_value(
         projected[-1], assumptions.discount_rate, assumptions.terminal_growth_rate
     )
-    discounted_tv = tv / (1 + assumptions.discount_rate) ** assumptions.forecast_years
+    discounted_tv = tv / (1 + assumptions.discount_rate) ** len(projected)
     enterprise_value = sum(discounted) + discounted_tv
     tv_pct = discounted_tv / enterprise_value if enterprise_value else None
 
@@ -116,13 +126,26 @@ def run_dcf(
     )
 
 
-def run_sensitivity(
+def run_dcf(
+    statement: FinancialStatement, base_fcff: float, assumptions: ValuationAssumptions
+) -> DCFResult:
+    projected = project_fcff(base_fcff, assumptions.fcff_growth_rate, assumptions.forecast_years)
+    return run_dcf_from_projection(statement, base_fcff, projected, assumptions)
+
+
+def run_sensitivity_with(
+    dcf_fn,
     statement: FinancialStatement,
     base_fcff: float,
     assumptions: ValuationAssumptions,
     discount_rate_deltas: tuple[float, ...] = DEFAULT_SENSITIVITY_DELTAS,
     terminal_growth_deltas: tuple[float, ...] = DEFAULT_SENSITIVITY_DELTAS,
 ) -> list[SensitivityPoint]:
+    """Same grid-search shape run_sensitivity() always used, generalized
+    over which DCF function builds each grid point - lets
+    h_model.run_h_model_sensitivity() reuse this loop instead of
+    duplicating it, passing run_h_model_dcf in place of run_dcf.
+    """
     points = []
     for dr_delta in discount_rate_deltas:
         for tg_delta in terminal_growth_deltas:
@@ -143,7 +166,7 @@ def run_sensitivity(
                     "terminal_growth_rate": terminal_growth_rate,
                 }
             )
-            result = run_dcf(statement, base_fcff, varied)
+            result = dcf_fn(statement, base_fcff, varied)
             points.append(
                 SensitivityPoint(
                     discount_rate=discount_rate,
@@ -152,6 +175,18 @@ def run_sensitivity(
                 )
             )
     return points
+
+
+def run_sensitivity(
+    statement: FinancialStatement,
+    base_fcff: float,
+    assumptions: ValuationAssumptions,
+    discount_rate_deltas: tuple[float, ...] = DEFAULT_SENSITIVITY_DELTAS,
+    terminal_growth_deltas: tuple[float, ...] = DEFAULT_SENSITIVITY_DELTAS,
+) -> list[SensitivityPoint]:
+    return run_sensitivity_with(
+        run_dcf, statement, base_fcff, assumptions, discount_rate_deltas, terminal_growth_deltas
+    )
 
 
 def run_dcf_valuation(

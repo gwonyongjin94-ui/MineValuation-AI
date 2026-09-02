@@ -28,7 +28,12 @@ def test_analyze_aapl_real_sec_data():
     assert oe is not None
     assert oe["value_per_share_low"] <= oe["value_per_share_high"]
     consensus = body["valuation_consensus"]
-    assert {r["method"] for r in consensus["ranges"]} == {"DCF (FCFF)", "DCF (Owner Earnings)"}
+    assert {r["method"] for r in consensus["ranges"]} == {
+        "DCF (FCFF)",
+        "DCF (Owner Earnings)",
+        "DCF (H-Model)",
+        "Residual Income",
+    }
 
 
 def test_analyze_jpm_real_sec_data_is_unsupported():

@@ -133,6 +133,11 @@ def main() -> int:
         help="path to a text file with an earnings call transcript to analyze for risks "
         "(needs ANTHROPIC_API_KEY)",
     )
+    parser.add_argument(
+        "--use-wacc-as-discount-rate", action="store_true",
+        help="override the flat 9%% discount rate with this company's own CAPM-derived "
+        "WACC in every valuation method, instead of just showing it as a reference figure",
+    )
     args = parser.parse_args()
 
     earnings_call_text = None
@@ -167,6 +172,7 @@ def main() -> int:
             client=client,
             ticker_map=build_default_ticker_map(),
             compute_comps=True,
+            use_wacc_as_discount_rate=args.use_wacc_as_discount_rate,
             market_data_client=market_data_client,
             analyze_10k=args.analyze_10k,
             earnings_call_text=earnings_call_text,
@@ -202,13 +208,18 @@ def main() -> int:
             f"margin of safety:  {_pct(mos.margin_of_safety)}  "
             f"(range: {_pct(mos.margin_of_safety_low)} ~ {_pct(mos.margin_of_safety_high)})"
         )
+        # mos.dcf.assumptions, not the module-level DEFAULT_ASSUMPTIONS -
+        # --use-wacc-as-discount-rate overrides discount_rate inside
+        # analyze() itself, so the static default printed here would be
+        # wrong (still show 9%) whenever that override actually fired.
+        used = mos.dcf.assumptions
         print()
         print(
             "assumptions used:  "
-            f"growth={_pct(DEFAULT_ASSUMPTIONS.fcff_growth_rate)}  "
-            f"discount={_pct(DEFAULT_ASSUMPTIONS.discount_rate)}  "
-            f"terminal={_pct(DEFAULT_ASSUMPTIONS.terminal_growth_rate)}  "
-            f"tax={_pct(DEFAULT_ASSUMPTIONS.tax_rate)}"
+            f"growth={_pct(used.fcff_growth_rate)}  "
+            f"discount={_pct(used.discount_rate)}  "
+            f"terminal={_pct(used.terminal_growth_rate)}  "
+            f"tax={_pct(used.tax_rate)}"
         )
 
     growth = result.fundamental_growth_estimate

@@ -329,4 +329,9 @@ def test_analyze_endpoint_returns_owner_earnings_and_consensus(client):
 
     consensus = body["valuation_consensus"]
     methods = {r["method"] for r in consensus["ranges"]}
-    assert methods == {"DCF (FCFF)", "DCF (Owner Earnings)"}
+    assert methods == {
+        "DCF (FCFF)",
+        "DCF (Owner Earnings)",
+        "DCF (H-Model)",
+        "Residual Income",
+    }

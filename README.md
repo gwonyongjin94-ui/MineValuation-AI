@@ -177,6 +177,31 @@ Lowe's) 그런 경우 "low-confidence sample" 경고가 붙는다 - 계산 자�
 "Comps layer", 계산식은 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)의
 "5. Comps" 참고.
 
+### H-Model DCF / 잔여이익모형(RIM) - 항상 계산됨
+
+DCF(FCFF)/Owner Earnings처럼 옵트인 없이 항상 계산돼서 `valuation_consensus`에
+낀다. **H-Model DCF**는 성장률이 5년째까지 flat하다가 6년째에 갑자기
+터미널 성장률로 떨어지는 대신, 매년 선형으로 서서히 fade한다(Fuller &
+Hsia 1984의 실무 표준 - "성장 절벽" 문제를 없앰). **잔여이익모형(RIM,
+Ohlson 1995 / EVA)**은 아예 다른 접근 - 현금흐름을 할인하는 대신 장부가치
+(`stockholders_equity`)에서 시작해서 자기자본비용을 웃도는 초과이익만
+현재가치로 더한다. 터미널밸류 의존도가 DCF보다 훨씬 낮아서, DCF와 다른
+방향의 참고점을 준다. 계산식·한계는 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)의
+"9. H-Model DCF"/"10. Residual Income", [LIMITATIONS.md](docs/LIMITATIONS.md)의
+"H-Model layer"/"Residual Income layer" 참고.
+
+```bash
+curl -X POST localhost:8000/api/v1/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"ticker": "AAPL", "market_price": 230, "use_wacc_as_discount_rate": true}'
+```
+`use_wacc_as_discount_rate: true`는 이 프로젝트에서 유일하게 참고용 수치가
+실제 계산에 개입하는 옵션이다 - `compute_wacc`가 계산한 CAPM 기반 WACC를
+전 종목 동일 9% 대신 이 회사만의 `discount_rate`로 실제 대체한다
+(`compute_wacc: true`를 안 켜도 자동으로 켜짐). WACC를 못 구하면(예:
+`interest_expense` 태그 없음) 경고와 함께 원래 할인율을 그대로 유지 -
+요청 전체가 실패하지 않음.
+
 ### 20-F(IFRS) 외국계 발행사 지원 - NVO(Novo Nordisk) 등
 
 ```bash

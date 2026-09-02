@@ -638,3 +638,55 @@ $31~58)이 시장가 $48.69와 합리적인 스케일로 나옴(6~7배씩 어긋
 (`scripts/analyze.py`)와 API(`app/api/analysis.py`) 둘 다 이미 항상
 `market_data_client`를 만들어서 넘기고 있어서, 이 경로가 실제로 막히는
 건 그 클라이언트를 안 넘기는 직접 프로그래매틱 호출/테스트뿐이다.
+
+## V10 — H-Model DCF + 잔여이익모형(RIM) 추가: "전문가들은 실제로 뭘 쓰나" 리서치의 후속
+
+사이트에서 실제 분석을 돌려본 사용자가 "왜 내재가치가 시장가랑 이렇게
+차이 나냐"고 물어서, 실제 논문/연구 기반으로 리서치 메모(아티팩트)를
+만들어 답했다 - 터미널밸류가 DCF 값의 60~80%를 차지한다는 것,
+CAPM/Fama-French가 실무 표준이라는 것, H-모형·잔여이익모형(RIM)이
+DCF의 대안으로 실제 기관에서 쓰인다는 것 등. 그다음 "그럼 다 만들 수
+있나?"는 질문에, 만들 수 있는 것(H-모형, RIM, CAPM 할인율 실제 적용)과
+못 만드는 것(Fama-French - 별도 요인수익률 데이터+회귀분석 필요,
+Precedent Transactions - 무료 데이터 소스 없음)을 구분해서 전자만
+구현했다.
+
+**H-모형은 dcf.py를 새로 안 만들고 리팩터링해서 재사용했다.** `run_dcf()`의
+본문 중 "할인 → 터미널밸류 → equity value 브릿지" 부분(성장 경로가 뭐든
+동일한 로직)을 `run_dcf_from_projection()`으로 분리하고, `run_sensitivity()`도
+`run_sensitivity_with(dcf_fn, ...)`으로 일반화했다. `h_model.py`는 오직
+"성장률이 flat이 아니라 선형으로 fade하는 FCFF 시리즈를 만드는 부분"만
+새로 짜고, 나머지는 전부 기존 dcf.py 코드를 그대로 호출한다 - 리팩터링
+직후 전체 테스트(199개)를 다시 돌려서 기존 DCF/Owner Earnings 결과가
+한 글자도 안 바뀌었다는 걸 확인한 뒤에 새 코드를 얹었다.
+
+**실데이터로 H-모형이 실제로 터미널밸류 의존도를 낮추는지 검증**: AAPL
+기준 flat DCF는 terminal_value_pct_of_ev가 종종 75% 경고 임계값을
+넘었는데, H-모형은 73.8%로 나옴 - 이론대로 마지막 예측연도 FCFF가
+(flat 5%가 아니라 터미널 성장률 쪽으로 이미 fade된) 더 작은 값이라
+터미널밸류 자체가 상대적으로 작아진 것. 테스트에도 이 성질 자체를
+검증하는 케이스(`test_h_model_reduces_terminal_value_dominance_vs_flat_dcf`)를
+추가했다 - 숫자 하나를 하드코딩하는 대신, "H-모형의 terminal_value_pct_of_ev가
+flat DCF보다 항상 낮다"는 관계 자체를 단언.
+
+**RIM은 cost_of_equity를 어디서 가져올지가 진짜 설계 포인트였다.** RIM은
+이론상 WACC가 아니라 cost_of_equity로 할인해야 맞는데(자기자본 관점의
+초과이익을 할인하는 거라서), 마침 `wacc.py`의 `estimate_wacc()`가 이미
+`cost_of_equity`를 WACC 전체 계산 실패 여부와 무관하게 항상 시도해서
+계산해두고 있었다(AAPL처럼 `interest_expense` 태그가 없어서 `wacc.wacc`가
+`None`이 되는 경우에도 `cost_of_equity`는 살아있음, 이번 세션 초반에
+확인한 사실) - 그래서 `compute_wacc`가 켜져 있고 성공했으면 그 실제
+CAPM 값을 쓰고, 아니면 `assumptions.discount_rate`로 폴백하는 설계로
+정리했다. RIM 자체는 owner_earnings 패턴과 똑같이 "항상 계산 시도,
+실패하면 경고" — `compute_wacc` 옵트인 여부와 무관하게 늘 consensus에
+낀다.
+
+**`use_wacc_as_discount_rate`는 이 프로젝트 설계 원칙에서 유일한 예외다.**
+지금까지 growth/WACC/comps는 전부 "참고용으로만 보여주고 실제 계산에는
+절대 안 씀"이 세션 내내 반복된 원칙이었는데, 이번엔 사용자가 명시적으로
+"CAPM 할인율을 실제로 쓰는 옵션"을 요청해서, 유일하게 진짜 계산에
+개입하는 옵트인 플래그를 만들었다. 실데이터로 두 경로 다 확인: AAPL은
+`interest_expense` 태그가 없어서 `wacc.wacc`가 `None` → 폴백 경고 뜨고
+원래 9% 유지. CVX는 실제 WACC(5.88%)가 나와서 할인율이 9%→5.88%로
+실제 대체되고, 내재가치가 그만큼 크게 올라감($116→$406 수준, CVX
+기준) - 낮은 할인율일수록 현재가치가 커진다는 이론과 정확히 일치.

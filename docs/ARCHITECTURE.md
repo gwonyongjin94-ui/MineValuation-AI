@@ -93,10 +93,12 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | `valuation/assumptions.py` | Typed, validated assumption inputs | Contain a growth/discount/tax number itself |
 | `valuation/fcff.py` | FCFF per statement, base-FCFF selection | Discount anything |
 | `valuation/growth.py` | Reference fundamental growth rate (reinvestment rate x ROIC) from a company's own data | Feed into or override `assumptions.fcff_growth_rate` |
-| `valuation/wacc.py` | Reference WACC estimate (bottom-up beta, synthetic-rating cost of debt, live risk-free rate) | Feed into or override `assumptions.discount_rate` |
+| `valuation/wacc.py` | Reference WACC estimate (bottom-up beta, synthetic-rating cost of debt, live risk-free rate) | Override `assumptions.discount_rate` itself - `analysis_service.analyze()` does that, opt-in, only when `use_wacc_as_discount_rate` is set |
 | `valuation/comps.py` | Reference comps estimate (peer trading multiples -> implied value) | Feed into or override `margin_of_safety` |
-| `valuation/dcf.py` | Project, discount, terminal value, sensitivity - reused unchanged by owner_earnings.py | Know about market price |
+| `valuation/dcf.py` | Project, discount, terminal value, sensitivity - the equity-bridge core (`run_dcf_from_projection`) and sensitivity grid (`run_sensitivity_with`) are reused unchanged by owner_earnings.py and h_model.py | Know about market price |
 | `valuation/owner_earnings.py` | Owner Earnings (per Buffett) + a second DCF variant discounting it | Know about FCFF or NOPAT |
+| `valuation/h_model.py` | H-Model DCF - FCFF growth fades linearly to terminal_growth_rate instead of dcf.py's flat-then-cliff | Reimplement discounting/terminal-value/equity-bridge (reuses dcf.py's) |
+| `valuation/residual_income.py` | Residual Income / EVA - book value + PV(future excess earnings), no cash-flow discounting | Compute cost_of_equity itself - the caller supplies it |
 | `valuation/consensus.py` | Intersect every available method's value-per-share range | Compute any range itself |
 | `valuation/margin_of_safety.py` | market price + as_of_date -> MOS range | Fetch market data |
 | `qualitative/risk_extraction.py` | Text -> structured qualitative risks (forced tool-use) | Fetch text, know its source |

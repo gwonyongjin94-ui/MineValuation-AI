@@ -16,6 +16,7 @@ const els = {
   price: document.getElementById("price"),
   computeWacc: document.getElementById("compute-wacc"),
   computeComps: document.getElementById("compute-comps"),
+  useWaccAsDiscountRate: document.getElementById("use-wacc-as-discount-rate"),
   analyze10k: document.getElementById("analyze-10k"),
   anthropicKey: document.getElementById("anthropic-key"),
   earningsCall: document.getElementById("earnings-call"),
@@ -347,6 +348,7 @@ async function handleSubmit(event) {
     market_price: price,
     compute_wacc: els.computeWacc.checked,
     compute_comps: els.computeComps.checked,
+    use_wacc_as_discount_rate: els.useWaccAsDiscountRate.checked,
   };
   if (analyze10k) payload.analyze_10k = true;
   if (earningsCallText) payload.earnings_call_text = earningsCallText;

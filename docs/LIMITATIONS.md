@@ -320,14 +320,57 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   a year with an unusual tax benefit or a debt refinancing charge shows
   up directly in the range in a way FCFF wouldn't.
 
+## H-Model layer
+
+- **A heuristic linear fade, not a fitted or company-specific one** -
+  `fcff_growth_rate` fades to `terminal_growth_rate` in a straight line
+  over `forecast_years` regardless of what's actually happening to this
+  company's growth (a real business's growth path could plateau, dip
+  and recover, or fade faster/slower than linear) - it removes DCF's
+  overnight cliff, it doesn't make the fade shape itself
+  company-specific.
+- **Inherits every FCFF/base-selection limitation** the plain DCF has
+  (see the Valuation layer section above) - only the growth path
+  differs; the base FCFF, the equity-value bridge, and the terminal
+  value formula are identical code.
+
+## Residual Income layer
+
+- **Assumes 100% earnings retention** - `BookValue(t) = BookValue(t-1)
+  + NetIncome(t)`, with no dividends-paid subtraction (this project
+  doesn't normalize that tag - see DATA_MODEL.md). Overstates book
+  value, and understates the residual-income effect, for any real
+  dividend payer - the more of net income a company actually pays out,
+  the bigger this distortion gets.
+- **`cost_of_equity` is often a fallback proxy, not a real per-company
+  figure.** Only uses CAPM's actual `wacc_estimate.cost_of_equity` when
+  `compute_wacc` was requested AND succeeded for this company;
+  otherwise falls back to `assumptions.discount_rate` (flagged via
+  warning) - the same flat number DCF uses for every ticker, applied
+  here as a stand-in for a fundamentally different rate (cost of
+  equity, not WACC).
+- **Net income growth reuses `fcff_growth_rate`** for cross-method
+  comparability with the DCF variants inside `valuation_consensus`, not
+  because it's independently the most defensible growth assumption for
+  net income specifically - a company's earnings and its free cash flow
+  don't necessarily grow at the same rate.
+- **Terminal residual income can still dominate** for a low
+  `cost_of_equity` (e.g. when `use_wacc_as_discount_rate` produces a
+  low WACC) - flagged the same way DCF's terminal value is, via a
+  `terminal_pct_of_equity_value` warning above 75%, but the model's
+  original appeal (book value doing most of the work, not a distant
+  terminal number) weakens exactly when the discount rate is smallest.
+
 ## Valuation Consensus layer
 
-- **Only spans whichever methods actually ran** - by default (no
-  `compute_comps`), consensus is only ever DCF-FCFF ∩ Owner Earnings
-  DCF; Comps only joins in when requested, and precedent-transactions
+- **Only spans whichever methods actually ran** - Comps only joins in
+  when `compute_comps` is requested, and precedent-transactions
   analysis isn't implemented at all (see the Comps layer section
-  above), so this is not the full three-to-four-method "football field"
-  a real deal team would build.
+  above). DCF(FCFF), Owner Earnings DCF, H-Model DCF, and Residual
+  Income are all always attempted regardless of request flags, so the
+  default consensus set is four methods, not the two ("DCF-FCFF ∩
+  Owner Earnings DCF") an earlier version of this project computed by
+  default.
 - **No weighting between methods** - the intersection treats every
   available range as equally authoritative. A method resting on a
   single peer (see the Comps layer's thin-sample warning) counts the

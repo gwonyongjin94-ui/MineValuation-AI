@@ -3,11 +3,16 @@ plus optional qualitative risk extraction (10-K text and/or a
 user-pasted earnings call transcript), optional FinBERT sentiment
 scoring of that same text, an optional WACC estimate from real market
 data (app/valuation/wacc.py), an optional comparable-company analysis
-(app/valuation/comps.py), and an Owner Earnings DCF (per Buffett -
-app/valuation/owner_earnings.py). Growth/WACC/comps are reference
+(app/valuation/comps.py), an Owner Earnings DCF (per Buffett -
+app/valuation/owner_earnings.py), an H-Model DCF with linearly fading
+growth (app/valuation/h_model.py), and a Residual Income valuation
+(app/valuation/residual_income.py). Growth/WACC/comps are reference
 figures only - never substituted into `assumptions` or
-`margin_of_safety`. DCF-FCFF, Owner Earnings DCF, and comps each
-produce their own conservative-to-optimistic value-per-share range;
+`margin_of_safety`, UNLESS `use_wacc_as_discount_rate` is explicitly
+set, which overrides `assumptions.discount_rate` with the CAPM-derived
+WACC before any valuation method runs (see below). DCF-FCFF, Owner
+Earnings DCF, H-Model DCF, Residual Income, and comps each produce
+their own conservative-to-optimistic value-per-share range;
 app/valuation/consensus.py computes the overlap across whichever of
 them are available for this request as `valuation_consensus`.
 
@@ -48,8 +53,10 @@ from app.valuation.comps import CompsEstimate, estimate_comps
 from app.valuation.consensus import ValuationConsensus, ValueRange, compute_consensus
 from app.valuation.dcf import UnsupportedValuationError
 from app.valuation.growth import FundamentalGrowthEstimate, estimate_fundamental_growth_rate
+from app.valuation.h_model import HModelEstimate, run_h_model_estimate
 from app.valuation.margin_of_safety import MarginOfSafetyResult, compute_margin_of_safety
 from app.valuation.owner_earnings import OwnerEarningsDCFResult, run_owner_earnings_dcf_valuation
+from app.valuation.residual_income import ResidualIncomeEstimate, run_residual_income_estimate
 from app.valuation.wacc import FALLBACK_RISK_FREE_RATE, WACCEstimate, estimate_wacc
 
 # Not a numeric MOS adjustment - deliberately. There's no defensible formula
@@ -72,6 +79,8 @@ class AnalysisResult(BaseModel):
     wacc_estimate: WACCEstimate | None
     comps_estimate: CompsEstimate | None
     owner_earnings_estimate: OwnerEarningsDCFResult | None
+    h_model_estimate: HModelEstimate | None
+    residual_income_estimate: ResidualIncomeEstimate | None
     valuation_consensus: ValuationConsensus
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
@@ -124,8 +133,14 @@ def analyze(
     cross_validate: bool = False,
     compute_wacc: bool = False,
     compute_comps: bool = False,
+    use_wacc_as_discount_rate: bool = False,
     market_data_client=None,
 ) -> AnalysisResult:
+    # Implies compute_wacc rather than requiring the caller to set both -
+    # there's no real use case for "override the discount rate with WACC"
+    # without also computing that WACC.
+    compute_wacc = compute_wacc or use_wacc_as_discount_rate
+
     if (analyze_10k or earnings_call_text) and anthropic_client is None:
         raise QualitativeAnalysisError(
             "qualitative analysis requested but no Anthropic client configured"
@@ -195,6 +210,50 @@ def analyze(
             latest_statement, market_price, risk_free_rate, assumptions.tax_rate
         )
 
+    # The one place a reference figure DOES get substituted into the real
+    # valuation math, and only because the caller explicitly asked for
+    # it. Must happen before margin_of_safety/owner_earnings/h_model/
+    # residual_income below - all of them read assumptions.discount_rate.
+    if use_wacc_as_discount_rate:
+        original_discount_rate = assumptions.discount_rate
+        if wacc_estimate is not None and wacc_estimate.wacc is not None:
+            try:
+                assumptions = assumptions.model_copy(
+                    update={"discount_rate": wacc_estimate.wacc}
+                )
+                warnings.append(
+                    f"discount_rate overridden with CAPM-derived WACC "
+                    f"({wacc_estimate.wacc:.2%}) instead of the requested "
+                    f"{original_discount_rate:.2%} - use_wacc_as_discount_rate was set"
+                )
+            except ValueError as exc:
+                warnings.append(
+                    f"could not use WACC as discount_rate ({exc}) - kept "
+                    f"{original_discount_rate:.2%}"
+                )
+        else:
+            warnings.append(
+                "use_wacc_as_discount_rate requested but wacc_estimate.wacc is "
+                f"unavailable - kept assumptions.discount_rate ({original_discount_rate:.2%})"
+            )
+
+    # Residual Income needs a cost of equity specifically (it discounts
+    # equity-level residual income, not firm-level FCFF) - CAPM's real,
+    # company-specific figure when compute_wacc produced one, otherwise
+    # assumptions.discount_rate as a documented approximation (this
+    # project already treats that as a single flat proxy everywhere
+    # else, so falling back to it here is consistent, not a new
+    # simplification). See residual_income.py's module docstring.
+    if wacc_estimate is not None and wacc_estimate.cost_of_equity is not None:
+        cost_of_equity_for_rim = wacc_estimate.cost_of_equity
+    else:
+        cost_of_equity_for_rim = assumptions.discount_rate
+        warnings.append(
+            "residual_income_estimate uses assumptions.discount_rate as a cost-of-equity "
+            "proxy (compute_wacc not requested, or CAPM cost of equity unavailable) - "
+            "not a real per-company cost of equity"
+        )
+
     comps_estimate = None
     if compute_comps and statements:
         try:
@@ -219,6 +278,20 @@ def analyze(
         owner_earnings_estimate = run_owner_earnings_dcf_valuation(statements, assumptions)
     except UnsupportedValuationError as exc:
         warnings.append(f"Owner Earnings DCF unavailable: {exc}")
+
+    h_model_estimate = None
+    try:
+        h_model_estimate = run_h_model_estimate(statements, assumptions)
+    except UnsupportedValuationError as exc:
+        warnings.append(f"H-Model DCF unavailable: {exc}")
+
+    residual_income_estimate = None
+    try:
+        residual_income_estimate = run_residual_income_estimate(
+            statements, assumptions, cost_of_equity_for_rim
+        )
+    except UnsupportedValuationError as exc:
+        warnings.append(f"Residual Income valuation unavailable: {exc}")
 
     value_ranges = []
     if margin_of_safety is not None and None not in (
@@ -252,6 +325,28 @@ def analyze(
                 method="Comps",
                 low=comps_estimate.value_per_share_low,
                 high=comps_estimate.value_per_share_high,
+            )
+        )
+    if h_model_estimate is not None and None not in (
+        h_model_estimate.value_per_share_low,
+        h_model_estimate.value_per_share_high,
+    ):
+        value_ranges.append(
+            ValueRange(
+                method="DCF (H-Model)",
+                low=h_model_estimate.value_per_share_low,
+                high=h_model_estimate.value_per_share_high,
+            )
+        )
+    if residual_income_estimate is not None and None not in (
+        residual_income_estimate.value_per_share_low,
+        residual_income_estimate.value_per_share_high,
+    ):
+        value_ranges.append(
+            ValueRange(
+                method="Residual Income",
+                low=residual_income_estimate.value_per_share_low,
+                high=residual_income_estimate.value_per_share_high,
             )
         )
     valuation_consensus = compute_consensus(value_ranges)
@@ -320,6 +415,8 @@ def analyze(
         wacc_estimate=wacc_estimate,
         comps_estimate=comps_estimate,
         owner_earnings_estimate=owner_earnings_estimate,
+        h_model_estimate=h_model_estimate,
+        residual_income_estimate=residual_income_estimate,
         valuation_consensus=valuation_consensus,
         qualitative_analyses=qualitative_analyses,
         sentiment_analyses=sentiment_analyses,

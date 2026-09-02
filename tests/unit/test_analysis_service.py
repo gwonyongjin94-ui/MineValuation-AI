@@ -432,8 +432,16 @@ def test_analyze_valuation_consensus_combines_dcf_and_owner_earnings_ranges(tmp_
 
     consensus = result.valuation_consensus
     methods = {r.method for r in consensus.ranges}
-    # comps wasn't requested, so only the two DCF variants contribute.
-    assert methods == {"DCF (FCFF)", "DCF (Owner Earnings)"}
+    # comps wasn't requested, so it's absent - but DCF(FCFF)/Owner
+    # Earnings/H-Model/Residual Income are all always computed
+    # (Residual Income falls back to assumptions.discount_rate as a
+    # cost-of-equity proxy when compute_wacc wasn't requested either).
+    assert methods == {
+        "DCF (FCFF)",
+        "DCF (Owner Earnings)",
+        "DCF (H-Model)",
+        "Residual Income",
+    }
     assert consensus.overlap_low is not None or "no overlap" in " ".join(consensus.warnings)
 
 
@@ -545,3 +553,69 @@ def test_analyze_ifrs_filer_converts_currency_and_computes_valuation(tmp_path):
     # Currency-agnostic - untouched by the conversion.
     assert latest.shares_outstanding.value == 10000
     assert any("converted from DKK to USD" in w for w in result.warnings)
+
+
+def _company_facts_with_interest_expense():
+    # standard_company_facts() has no InterestExpense tag by design (see
+    # its own test's comment) - a plain dict-merge on top of it, not a
+    # change to the shared fixture other tests rely on.
+    facts = standard_company_facts()
+    facts["facts"]["us-gaap"]["InterestExpense"] = {
+        "units": {
+            "USD": [
+                sec_entry(50, "2023-12-31", 2023, filed="2024-02-01", accn="A-2023",
+                          start="2023-01-01"),
+                sec_entry(60, "2024-12-31", 2024, filed="2025-02-01", accn="A-2024",
+                          start="2024-01-01"),
+            ]
+        }
+    }
+    return facts
+
+
+def test_analyze_use_wacc_as_discount_rate_falls_back_when_wacc_unavailable(tmp_path):
+    # standard_company_facts() has no InterestExpense, so cost of debt
+    # (and therefore wacc_estimate.wacc) can't be computed - the override
+    # must fall back to the requested discount_rate rather than crash or
+    # silently use a wrong one.
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        use_wacc_as_discount_rate=True,
+        market_data_client=build_mock_market_data_client(4.50),
+    )
+
+    assert result.wacc_estimate is not None
+    assert result.wacc_estimate.wacc is None
+    assert result.margin_of_safety.dcf.assumptions.discount_rate == pytest.approx(0.10)
+    assert any(
+        "use_wacc_as_discount_rate requested but wacc_estimate.wacc is unavailable" in w
+        for w in result.warnings
+    )
+
+
+def test_analyze_use_wacc_as_discount_rate_overrides_discount_rate(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2026, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, _company_facts_with_interest_expense()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+        use_wacc_as_discount_rate=True,
+        market_data_client=build_mock_market_data_client(4.50),
+    )
+
+    wacc = result.wacc_estimate
+    assert wacc is not None
+    assert wacc.wacc is not None
+    # The override actually took effect: every method downstream used
+    # wacc.wacc, not the 10% _assumptions() requested.
+    assert wacc.wacc != pytest.approx(0.10)
+    assert result.margin_of_safety.dcf.assumptions.discount_rate == pytest.approx(wacc.wacc)
+    assert result.h_model_estimate.dcf.assumptions.discount_rate == pytest.approx(wacc.wacc)
+    assert any("discount_rate overridden with CAPM-derived WACC" in w for w in result.warnings)

@@ -21,8 +21,10 @@ from app.valuation.assumptions import BaseFCFMethod, ValuationAssumptions
 from app.valuation.comps import CompsEstimate
 from app.valuation.consensus import ValuationConsensus
 from app.valuation.growth import FundamentalGrowthEstimate
+from app.valuation.h_model import HModelEstimate
 from app.valuation.margin_of_safety import MarginOfSafetyResult
 from app.valuation.owner_earnings import OwnerEarningsDCFResult
+from app.valuation.residual_income import ResidualIncomeEstimate
 from app.valuation.wacc import WACCEstimate
 
 router = APIRouter()
@@ -138,6 +140,13 @@ class AnalyzeRequest(BaseModel):
     # opt-in - and, like fundamental_growth_estimate/wacc_estimate, this
     # is a reference figure only, never merged into margin_of_safety.
     compute_comps: bool = False
+    # Substitutes the CAPM-derived WACC (compute_wacc's estimate) for
+    # assumptions.discount_rate in every valuation method - the one
+    # place a reference figure actually overrides the real math instead
+    # of sitting alongside it. Implies compute_wacc=true. Falls back to
+    # the requested discount_rate (with a warning) if WACC can't be
+    # computed for this company - never fails the whole request over it.
+    use_wacc_as_discount_rate: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -150,6 +159,8 @@ class AnalyzeResponse(BaseModel):
     wacc_estimate: WACCEstimate | None
     comps_estimate: CompsEstimate | None
     owner_earnings_estimate: OwnerEarningsDCFResult | None
+    h_model_estimate: HModelEstimate | None
+    residual_income_estimate: ResidualIncomeEstimate | None
     valuation_consensus: ValuationConsensus
     qualitative_analyses: list[QualitativeRiskAnalysis]
     sentiment_analyses: list[SentimentSummary]
@@ -219,6 +230,7 @@ def analyze_ticker(
             cross_validate=request.cross_validate,
             compute_wacc=request.compute_wacc,
             compute_comps=request.compute_comps,
+            use_wacc_as_discount_rate=request.use_wacc_as_discount_rate,
             market_data_client=market_data_client,
         )
     except SECClientError as exc:
@@ -238,6 +250,8 @@ def analyze_ticker(
         wacc_estimate=result.wacc_estimate,
         comps_estimate=result.comps_estimate,
         owner_earnings_estimate=result.owner_earnings_estimate,
+        h_model_estimate=result.h_model_estimate,
+        residual_income_estimate=result.residual_income_estimate,
         valuation_consensus=result.valuation_consensus,
         qualitative_analyses=result.qualitative_analyses,
         sentiment_analyses=result.sentiment_analyses,

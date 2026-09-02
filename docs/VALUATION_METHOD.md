@@ -1,11 +1,12 @@
 # Valuation Method
 
-FCFF-based DCF, per Damodaran, plus a growing set of reference methods
-(Owner Earnings DCF, WACC estimate, Comps) intersected into one
+FCFF-based DCF, per Damodaran, plus a growing set of independent
+valuation methods (Owner Earnings DCF, H-Model DCF, Residual Income,
+Comps) and reference figures (WACC estimate) intersected into one
 consensus range. This describes exactly what
 `app/valuation/{assumptions,fcff,dcf,margin_of_safety,growth,wacc,
-comps,owner_earnings,consensus}.py` implement - not a general valuation
-tutorial.
+comps,owner_earnings,h_model,residual_income,consensus}.py` implement -
+not a general valuation tutorial.
 
 ## 1. FCFF (`app/valuation/fcff.py`)
 
@@ -549,6 +550,105 @@ all handled automatically with no extra request parameter:
    raises `MarketDataError` rather than silently computing a
    USD-labeled number that's actually still denominated in DKK - see
    [LIMITATIONS.md](LIMITATIONS.md).
+
+## 9. H-Model DCF (`app/valuation/h_model.py`)
+
+Same FCFF projection as section 1-2's plain DCF, except the growth rate
+doesn't stay flat at `fcff_growth_rate` for `forecast_years` and then
+drop overnight to `terminal_growth_rate` - it fades **linearly** from
+one to the other, year by year, so the last forecast year is already
+growing at (approximately) the terminal rate by the time
+`compute_terminal_value()` extends it one more year into the
+perpetuity. This is the standard practitioner fix for DCF's "growth
+cliff" - see Fuller & Hsia (1984), the original H-Model paper (applied
+there to dividends; this project applies the same fading mechanics to
+FCFF instead).
+
+```
+growth(t) = fcff_growth_rate + (terminal_growth_rate - fcff_growth_rate) * (t-1)/(forecast_years-1)
+projected FCFF(t) = FCFF(t-1) * (1 + growth(t))
+```
+
+Implemented as an explicit year-by-year loop (`project_fading_fcff()`),
+not the H-Model's original closed-form algebraic shortcut - consistent
+with this project's existing style of auditable per-year series
+(fcff.py, dcf.py) over compressed formulas. Everything after the
+projection - discounting, terminal value, the equity-value bridge - is
+identical to the plain DCF's math and literally the same code
+(`run_dcf_from_projection()`, shared by both `dcf.run_dcf()` and
+`h_model.run_h_model_dcf()`).
+
+Always computed, like DCF(FCFF) and Owner Earnings DCF - wrapped in a
+try/except for `UnsupportedValuationError`, contributing a
+`"DCF (H-Model)"` range to `valuation_consensus` when it succeeds.
+Verified live: for the same inputs, H-Model's `terminal_value_pct_of_ev`
+is consistently lower than the plain DCF's, since the final forecast
+year's FCFF is smaller when growth faded toward the terminal rate
+instead of staying at the (usually higher) starting rate.
+
+## 10. Residual Income Model (`app/valuation/residual_income.py`)
+
+A structurally different approach from every other method above - it
+doesn't discount cash flows at all. Per Ohlson (1995) and Stewart's EVA
+(1991):
+
+```
+RI(t)  = NetIncome(t) - cost_of_equity * BookValue(t-1)
+Value  = BookValue(0) + sum(PV(RI(t))) + PV(terminal RI)
+```
+
+Starts from `stockholders_equity` (already on the balance sheet, not
+forecast) and adds only the present value of *excess* earnings - net
+income above what the cost of equity capital alone would require. If a
+company only ever earns exactly its cost of equity, residual income is
+zero and the model collapses to "value = book value" regardless of the
+forecast horizon. Institutional research uses this specifically because
+it sidesteps DCF's terminal-value dominance (see
+[DATA_SPIKE_NOTES.md](DATA_SPIKE_NOTES.md) V10 and the "DCF-시장가 괴리"
+research memo this was built to follow up on).
+
+Two documented simplifications (both flagged via warnings, not silently
+assumed):
+
+- **Full earnings retention.** `BookValue(t) = BookValue(t-1) +
+  NetIncome(t)` - the textbook clean-surplus relation subtracts
+  dividends too, but this project doesn't normalize a dividends-paid
+  tag (see DATA_MODEL.md), so retention is assumed 100%. Overstates
+  book value (and understates the residual-income effect) for a real
+  dividend payer.
+- **Net income grows at `fcff_growth_rate`** - the same assumption the
+  FCFF DCF uses, for cross-method comparability inside
+  `valuation_consensus`, not because it's independently the most
+  defensible growth path for net income specifically.
+
+`cost_of_equity` is a required parameter to this module, not computed
+inside it - `analysis_service.analyze()` supplies `wacc_estimate`'s
+CAPM-derived `cost_of_equity` when `compute_wacc` produced one,
+otherwise falls back to `assumptions.discount_rate` as a documented
+approximation (with a warning either way). Raises
+`UnsupportedValuationError` for a non-positive book value or when
+`cost_of_equity <= terminal_growth_rate` (the terminal RI perpetuity is
+undefined otherwise) - same "never guess, raise instead" pattern as
+every other method here.
+
+## `use_wacc_as_discount_rate` - the one reference figure that overrides real math
+
+Every other reference figure in this project (`fundamental_growth_estimate`,
+`wacc_estimate`, `comps_estimate`) is documented as "never substituted
+into assumptions or margin_of_safety" - shown alongside the real
+calculation, never merged into it. `use_wacc_as_discount_rate` is a
+deliberate, explicit exception: when set, `analyze()` overrides
+`assumptions.discount_rate` with the CAPM-derived `wacc_estimate.wacc`
+for this specific company, before DCF(FCFF)/Owner Earnings/H-Model all
+run - and Residual Income's `cost_of_equity` fallback logic (above)
+uses `wacc_estimate.cost_of_equity` too, so the whole
+`valuation_consensus` becomes company-specific rather than resting on
+one flat discount rate for every ticker. Implies `compute_wacc=true`.
+Falls back to the originally-requested `discount_rate` (with a warning)
+if `wacc_estimate.wacc` can't be computed for this company (e.g. no
+`interest_expense` tag - see LIMITATIONS.md) or if the resulting rate
+would violate `terminal_growth_rate < discount_rate` - never fails the
+whole request over it.
 
 ## Defaults at the API boundary
 
