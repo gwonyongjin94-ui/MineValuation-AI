@@ -16,6 +16,7 @@ FinBERT 감성분석까지 `/api/v1/analyze`에 연결되어 있다.
 - [VALUATION_METHOD.md](docs/VALUATION_METHOD.md) - FCFF/DCF/MOS 계산식, 정성분석과의 관계
 - [LIMITATIONS.md](docs/LIMITATIONS.md) - 알려진 한계
 - [DATA_SPIKE_NOTES.md](docs/DATA_SPIKE_NOTES.md) - 실데이터 관찰 기록(V1 XBRL + V2 filing HTML/FinBERT)
+- [DECISION_LOG.md](docs/DECISION_LOG.md) - 판단 기록 + 회고 루프, 교훈이 계산에 못 닿는 이유
 
 ## 로컬 실행
 
@@ -219,6 +220,44 @@ NVO 하나로만 실데이터 검증됐고, 다른 20-F 발행사에서 같은 I
 [LIMITATIONS.md](docs/LIMITATIONS.md), 계산식은
 [VALUATION_METHOD.md](docs/VALUATION_METHOD.md)의 "8. IFRS / non-USD
 filers" 참고.
+
+### 판단 기록 + 회고 루프 (Decision Log)
+
+```bash
+python scripts/analyze.py AAPL 212 --log-decision   # 판단을 기록
+python scripts/resolve_decisions.py --no-reflect    # 실제 주가로 채점 (무료)
+python scripts/resolve_decisions.py                 # 채점 + LLM 회고 (유료)
+python scripts/analyze.py AAPL 212 --use-track-record  # 과거 교훈을 프롬프트에 주입
+```
+
+기본 가정(할인율 9%, 성장률 5%)으로 우량 대형주를 돌리면 거의 전부
+큰 폭의 고평가로 나온다 - AAPL 안전마진 −82%, MSFT −209%. 태그 매핑을
+고쳐서 해결되는 문제가 아니라 **가정이 그 회사를 설명하지 못하는 것**이고,
+지금까지 코드에는 이걸 알아챌 방법이 없었다. 점수를 기록하는 게 없었기
+때문이다.
+
+Decision Log는 판단(`decision`) → 실제 결과(`outcome`) → 교훈(`reflection`)
+세 종류의 레코드를 JSONL 한 줄씩 append-only로 쌓고 `decision_id`로 조인한다.
+기존 레코드를 고쳐 쓰는 일이 없어서, 재무 데이터의 `restated_facts`가
+주는 것과 같은 성질 - "그때 무엇을 알고 있었는가"의 완전한 감사 추적 -
+을 우리 자신의 결론에도 적용한 것이다. 두 단계 모두 멱등해서, 중간에
+실패해도 다시 돌리면 빠진 것만 처리한다.
+
+**교훈이 닿을 수 있는 곳은 정성분석 프롬프트 하나뿐이다.** 성장률·WACC·Comps를
+참고 수치로만 두고 계산에 섞지 않는다는 이 프로젝트의 원칙이 여기서 가장
+세게 적용된다 - `ValuationAssumptions`에도, `margin_of_safety`에도 절대
+닿지 않고, 그걸 `tests/unit/test_analysis_service_decision_log.py`가
+같은 분석을 교훈 있이/없이 두 번 돌려 숫자를 직접 비교해서 강제한다.
+저장되는 정성 리스크는 **심각도별 개수뿐** - 리스크 이름도, 인용문도,
+`earnings_call_text`의 어떤 부분도 디스크에 남지 않는다.
+
+90일 지평은 밸류에이션이 맞았는지가 아니라 시장 분위기를 재는 것에
+가깝고, 교훈은 검증되지 않은 LLM 주장이다. 그래서 범위를 좁혀 막아둔
+것이지 검증으로 막은 게 아니다. 자세한 내용은
+[DECISION_LOG.md](docs/DECISION_LOG.md), 한계는
+[LIMITATIONS.md](docs/LIMITATIONS.md)의 "Decision log (V11)" 참고 -
+특히 Render 무료 플랜처럼 디스크가 휘발되는 배포에서는 재시작마다
+기록이 통째로 사라진다.
 
 ## 웹 UI (`site/`)
 

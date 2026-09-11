@@ -1,13 +1,17 @@
 """External (non-SEC) market data: the risk-free rate from FRED
 (app/valuation/wacc.py), peer current prices for comps
-(app/valuation/comps.py), and FX rates for IFRS foreign private issuers
+(app/valuation/comps.py), FX rates for IFRS foreign private issuers
 that report in a non-USD currency (app/financials/normalizer.py's
-convert_statements_to_usd()) - things this app needs that cannot come
+convert_statements_to_usd()), and daily price history for outcome
+resolution (app/memory/) - things this app needs that cannot come
 from a company's own SEC filings by definition (a Treasury yield,
 another company's live trading price, a currency's exchange rate).
 """
 
+from datetime import UTC, date, datetime
+
 import httpx
+from pydantic import BaseModel
 
 DGS10_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"
 YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
@@ -15,6 +19,11 @@ YAHOO_CHART_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
 
 class MarketDataError(Exception):
     """Failed to fetch or parse external (non-SEC) market data."""
+
+
+class PricePoint(BaseModel):
+    date: date
+    close: float
 
 
 def fetch_risk_free_rate(client: httpx.Client) -> float:
@@ -73,6 +82,64 @@ def fetch_current_price(ticker: str, client: httpx.Client) -> float:
     if not isinstance(price, int | float):
         raise MarketDataError(f"Yahoo Finance returned no usable price for {ticker}")
     return float(price)
+
+
+def fetch_price_history(ticker: str, client: httpx.Client, range_: str = "2y") -> list[PricePoint]:
+    """Daily closing prices for `ticker`, oldest first.
+
+    Same endpoint fetch_current_price() already uses - it only ever
+    parsed `meta.regularMarketPrice` (the latest tick), so an earlier
+    design note recorded "no historical range available" as a hard
+    limitation of this data source. That was a limitation of the
+    parsing, not the source: checked live, `range=1y` returns 251 daily
+    closes alongside the same meta block. Outcome resolution
+    (app/memory/) needs the series, not just the latest price, so this
+    reads the `timestamp` / `indicators.quote[0].close` arrays instead.
+
+    Yahoo reports `null` closes for some sessions (halts, early closes);
+    those points are dropped rather than interpolated - a gap in the
+    series is real missing data, and this project doesn't invent values
+    to fill one.
+    """
+    url = YAHOO_CHART_URL.format(ticker=ticker.upper())
+    try:
+        response = client.get(url, params={"range": range_, "interval": "1d"})
+    except httpx.RequestError as exc:
+        raise MarketDataError(f"failed to reach Yahoo Finance for {ticker}: {exc}") from exc
+    if response.status_code >= 400:
+        raise MarketDataError(f"Yahoo Finance returned HTTP {response.status_code} for {ticker}")
+
+    try:
+        result = response.json()["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise MarketDataError(
+            f"could not parse Yahoo Finance price history for {ticker}"
+        ) from exc
+
+    history = [
+        PricePoint(date=datetime.fromtimestamp(ts, tz=UTC).date(), close=float(close))
+        for ts, close in zip(timestamps, closes, strict=False)
+        if isinstance(close, int | float)
+    ]
+    if not history:
+        raise MarketDataError(f"Yahoo Finance returned no usable price history for {ticker}")
+    return history
+
+
+def close_on_or_after(history: list[PricePoint], target: date) -> PricePoint | None:
+    """First trading day at or after `target` - the price a decision made
+    on `target` would actually have been resolvable against.
+
+    Returns None when `target` is past the end of the series (the outcome
+    hasn't happened yet), which is how an unresolved decision stays
+    unresolved instead of being scored against a stale price.
+    """
+    for point in history:
+        if point.date >= target:
+            return point
+    return None
 
 
 def fetch_fx_rate(from_currency: str, to_currency: str, client: httpx.Client) -> float:

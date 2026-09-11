@@ -430,6 +430,48 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   `cross_validate` still doubles the LLM cost even when only one
   model's result ends up usable.
 
+## Decision log (V11)
+
+- **On an ephemeral filesystem, the log does not survive a restart.** It
+  is a plain JSONL file (`data/decisions.jsonl`), so a deployment
+  without a mounted volume - Render's free plan, most bare containers -
+  loses the entire track record on every redeploy or idle spin-down.
+  That makes `log_decision` close to useless on the hosted API and
+  genuinely useful on a machine that keeps its disk. Chosen knowingly: a
+  database would survive, but it would also make the log a deployment
+  dependency for a project whose entire valuation path needs no
+  persistence at all.
+- **No concurrency control.** Appends are `O_APPEND` line writes, which
+  are atomic enough for a single process and a single worker, but
+  nothing coordinates two processes (or two uvicorn workers) writing at
+  once. On a multi-worker deployment, interleaved partial lines are
+  possible. `read_records()` degrades gracefully - it skips the damaged
+  line with a warning rather than failing - but a damaged line is a lost
+  decision.
+- **A 90-day horizon measures the market's mood, not whether a valuation
+  was right.** This is the honest limitation, and no amount of
+  engineering fixes it. A DCF is a claim about cash flows over a decade;
+  a quarter of price movement is mostly noise with respect to that
+  claim. `stance_was_directionally_right` is therefore a weak signal
+  that only means anything in aggregate, across many decisions, and the
+  reflection prompt is written to say so - it explicitly instructs the
+  model not to state a lesson a single data point cannot support.
+- **Lessons are generated from the system's own history, so they compound
+  their own biases.** Nothing external corrects them. If early decisions
+  cluster on one sector in one market regime, the lessons drawn from
+  them will describe that regime and be applied to everything after it.
+  The `TRACK_RECORD_LESSON_LIMIT` of 5 and the per-ticker filter bound
+  the blast radius; they don't remove it.
+- **A reflection is an unverified LLM claim.** Same caveat as
+  `supporting_quote` above: nothing checks a lesson against the data it
+  purports to summarize. The structural protection is scope, not
+  verification - a lesson can only reach a qualitative prompt, never the
+  arithmetic (see [DECISION_LOG.md](DECISION_LOG.md)).
+- **Price history comes from the same unofficial Yahoo endpoint as
+  current prices**, with the same caveats already listed under the data
+  layer: no SLA, no guarantee of continued availability, and splits or
+  ticker changes are not reconciled against the decision's as-of date.
+
 ## Scope, generally
 
 - No portfolio management, trade execution, or stock screening/

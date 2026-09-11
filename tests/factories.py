@@ -237,7 +237,15 @@ def fake_anthropic_client(
     )
 
     class FakeMessages:
+        def __init__(self):
+            # Every create() call is kept so a test can assert on the
+            # prompt that was actually sent, not just the parsed result -
+            # needed by the track-record tests, which care about what
+            # reached the model rather than what came back.
+            self.sent = []
+
         def create(self, **kwargs):
+            self.sent.append(kwargs)
             return response
 
     return SimpleNamespace(messages=FakeMessages())

@@ -25,9 +25,12 @@ script, a test, a future CLI).
 """
 
 from datetime import date
+from pathlib import Path
+from uuid import uuid4
 
 from pydantic import BaseModel
 
+from app.config import get_settings
 from app.data.filing_documents import fetch_filing_document, list_recent_filings
 from app.data.market_data import MarketDataError, fetch_fx_rate, fetch_risk_free_rate
 from app.data.models import CompanyInfo, FinancialStatement
@@ -40,6 +43,14 @@ from app.financials.normalizer import (
     normalize,
     statement_currency,
 )
+from app.memory.decision_log import (
+    append_record,
+    format_track_record,
+    now_utc,
+    read_records,
+    recent_lessons,
+)
+from app.memory.models import DecisionRecord, Stance
 from app.qualitative.risk_extraction import (
     QualitativeAnalysisError,
     QualitativeRiskAnalysis,
@@ -68,6 +79,71 @@ from app.valuation.wacc import FALLBACK_RISK_FREE_RATE, WACCEstimate, estimate_w
 # qualitative risks are always reported side by side, never merged.
 HIGH_SEVERITY_WARNING_THRESHOLD = 2
 
+# How many past lessons get injected into a qualitative prompt when
+# include_track_record is set. Small on purpose: these compete for
+# attention with the filing text itself (60-70k tokens for a real 10-K),
+# and the point is calibration, not a second corpus to reason over.
+TRACK_RECORD_LESSON_LIMIT = 5
+
+
+def build_decision_record(
+    result: "AnalysisResult",
+    *,
+    ticker: str,
+    as_of_date: date,
+    market_price: float,
+    assumptions: ValuationAssumptions,
+    used_wacc_as_discount_rate: bool,
+) -> DecisionRecord:
+    """Maps a finished AnalysisResult to the append-only log's schema.
+
+    Lives here rather than in app/memory/ so that package stays a leaf
+    that a standalone script can import without pulling in FastAPI, the
+    SEC client, or this module - see decision_log.py's docstring.
+
+    `assumptions` is passed explicitly rather than read off `result`
+    because use_wacc_as_discount_rate rewrites it mid-analysis; the
+    caller has the version that actually ran.
+    """
+    mos = result.margin_of_safety
+    if mos is None or mos.margin_of_safety is None:
+        stance = Stance.UNSUPPORTED
+    elif mos.margin_of_safety > 0:
+        stance = Stance.UNDERVALUED
+    else:
+        stance = Stance.OVERVALUED
+
+    # Counts by severity only - no labels, no quotes, nothing derived
+    # from earnings_call_text. See app/memory/models.py on why.
+    risk_counts: dict[str, int] = {}
+    for analysis in result.qualitative_analyses:
+        for risk in analysis.risks:
+            risk_counts[risk.severity.value] = risk_counts.get(risk.severity.value, 0) + 1
+
+    consensus = result.valuation_consensus
+    return DecisionRecord(
+        decision_id=uuid4().hex,
+        logged_at=now_utc(),
+        ticker=ticker.upper(),
+        as_of_date=as_of_date,
+        market_price=market_price,
+        valuation_category=result.company.valuation_category.value,
+        stance=stance,
+        assumptions=assumptions,
+        used_wacc_as_discount_rate=used_wacc_as_discount_rate,
+        intrinsic_value_per_share=mos.intrinsic_value_per_share if mos else None,
+        intrinsic_value_low=mos.intrinsic_value_low if mos else None,
+        intrinsic_value_high=mos.intrinsic_value_high if mos else None,
+        margin_of_safety=mos.margin_of_safety if mos else None,
+        consensus_methods=[r.method for r in consensus.ranges],
+        consensus_low=consensus.overlap_low,
+        consensus_high=consensus.overlap_high,
+        qualitative_sources=[a.source_label for a in result.qualitative_analyses],
+        qualitative_risk_counts=risk_counts,
+        unsupported_reason=result.unsupported_reason,
+        warning_count=len(result.warnings),
+    )
+
 
 class AnalysisResult(BaseModel):
     company: CompanyInfo
@@ -94,13 +170,24 @@ def _run_qualitative_extraction(
     source_label: str,
     source_accession_number: str | None,
     cross_validate: bool,
+    track_record: str | None = None,
 ) -> tuple[list[QualitativeRiskAnalysis], list[str]]:
     if not cross_validate:
-        analysis = extract_risks(anthropic_client, text, source_label, source_accession_number)
+        analysis = extract_risks(
+            anthropic_client,
+            text,
+            source_label,
+            source_accession_number,
+            track_record=track_record,
+        )
         return [analysis], []
 
     cross_result = run_cross_model_extraction(
-        anthropic_client, text, source_label, source_accession_number
+        anthropic_client,
+        text,
+        source_label,
+        source_accession_number,
+        track_record=track_record,
     )
     warnings: list[str] = []
     if cross_result.failed_models:
@@ -135,6 +222,9 @@ def analyze(
     compute_comps: bool = False,
     use_wacc_as_discount_rate: bool = False,
     market_data_client=None,
+    log_decision: bool = False,
+    include_track_record: bool = False,
+    decision_log_path: Path | None = None,
 ) -> AnalysisResult:
     # Implies compute_wacc rather than requiring the caller to set both -
     # there's no real use case for "override the discount rate with WACC"
@@ -356,6 +446,27 @@ def analyze(
         f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
     ]
 
+    # Resolved once for both qualitative sources below, so a request with
+    # a 10-K and an earnings call reads the log once, not twice.
+    log_path = decision_log_path or get_settings().resolved_decision_log_path
+    track_record = None
+    if include_track_record:
+        past_records, log_warnings = read_records(log_path)
+        warnings.extend(log_warnings)
+        lessons = recent_lessons(past_records, ticker=ticker, limit=TRACK_RECORD_LESSON_LIMIT)
+        if lessons:
+            track_record = format_track_record(lessons)
+            warnings.append(
+                f"qualitative prompts include {len(lessons)} past lesson(s) from the "
+                "decision log (include_track_record) - these affect only the LLM's "
+                "risk weighting, never the computed valuation numbers"
+            )
+        else:
+            warnings.append(
+                "include_track_record requested but the decision log has no reflections "
+                f"for {ticker.upper()} yet - prompts sent unchanged"
+            )
+
     qualitative_analyses: list[QualitativeRiskAnalysis] = []
     sentiment_analyses: list[SentimentSummary] = []
     if analyze_10k:
@@ -363,7 +474,12 @@ def analyze(
         if filings:
             document = fetch_filing_document(client, cik, filings[0])
             new_analyses, cross_warnings = _run_qualitative_extraction(
-                anthropic_client, document.text, "10-K", document.accession_number, cross_validate
+                anthropic_client,
+                document.text,
+                "10-K",
+                document.accession_number,
+                cross_validate,
+                track_record=track_record,
             )
             qualitative_analyses.extend(new_analyses)
             warnings.extend(cross_warnings)
@@ -380,6 +496,7 @@ def analyze(
             "Earnings call (user-provided)",
             None,
             cross_validate,
+            track_record=track_record,
         )
         qualitative_analyses.extend(new_analyses)
         warnings.extend(cross_warnings)
@@ -405,7 +522,7 @@ def analyze(
             "of safety alone"
         )
 
-    return AnalysisResult(
+    result = AnalysisResult(
         company=company,
         financials=statements,
         metrics=metrics,
@@ -423,3 +540,26 @@ def analyze(
         sources=sources,
         warnings=warnings,
     )
+
+    if log_decision:
+        # Last thing before returning, so the log only ever records
+        # analyses that actually completed. A disk failure here must not
+        # cost the caller a result they already paid SEC/LLM calls for -
+        # it degrades to a warning on the result, same as every other
+        # non-essential step in this function.
+        try:
+            append_record(
+                build_decision_record(
+                    result,
+                    ticker=ticker,
+                    as_of_date=as_of_date,
+                    market_price=market_price,
+                    assumptions=assumptions,
+                    used_wacc_as_discount_rate=use_wacc_as_discount_rate,
+                ),
+                log_path,
+            )
+        except OSError as exc:
+            result.warnings.append(f"could not append to the decision log at {log_path}: {exc}")
+
+    return result

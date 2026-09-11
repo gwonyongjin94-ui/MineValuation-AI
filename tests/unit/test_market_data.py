@@ -1,10 +1,15 @@
+from datetime import date
+
 import httpx
 import pytest
 
 from app.data.market_data import (
     MarketDataError,
+    PricePoint,
+    close_on_or_after,
     fetch_current_price,
     fetch_fx_rate,
+    fetch_price_history,
     fetch_risk_free_rate,
 )
 
@@ -105,3 +110,69 @@ def test_fetch_fx_rate_builds_the_yahoo_pair_ticker():
 
     assert rate == pytest.approx(0.156)
     assert "DKKUSD=X" in seen_urls[0]
+
+
+def _history_body(points: list[tuple[int, float | None]]) -> dict:
+    return {
+        "chart": {
+            "result": [
+                {
+                    "timestamp": [ts for ts, _ in points],
+                    "indicators": {"quote": [{"close": [close for _, close in points]}]},
+                }
+            ]
+        }
+    }
+
+
+def test_fetch_price_history_parses_timestamp_and_close_arrays():
+    # 2026-01-02 and 2026-01-05 UTC.
+    body = _history_body([(1767312000, 100.0), (1767571200, 105.5)])
+
+    history = fetch_price_history("AAPL", _json_client(body))
+
+    assert [p.date for p in history] == [date(2026, 1, 2), date(2026, 1, 5)]
+    assert [p.close for p in history] == [pytest.approx(100.0), pytest.approx(105.5)]
+
+
+def test_fetch_price_history_drops_null_closes_rather_than_interpolating():
+    # Yahoo reports null closes for halted/early-close sessions - a gap is
+    # real missing data, not something to fill in.
+    body = _history_body([(1767312000, 100.0), (1767398400, None), (1767571200, 105.5)])
+
+    history = fetch_price_history("AAPL", _json_client(body))
+
+    assert len(history) == 2
+    assert [p.date for p in history] == [date(2026, 1, 2), date(2026, 1, 5)]
+
+
+def test_fetch_price_history_raises_when_every_close_is_null():
+    body = _history_body([(1767312000, None)])
+
+    with pytest.raises(MarketDataError, match="no usable price history"):
+        fetch_price_history("AAPL", _json_client(body))
+
+
+def test_fetch_price_history_raises_on_malformed_response():
+    with pytest.raises(MarketDataError, match="could not parse"):
+        fetch_price_history("AAPL", _json_client({"chart": {"result": [{}]}}))
+
+
+def test_close_on_or_after_rolls_forward_to_the_next_trading_day():
+    history = [
+        PricePoint(date=date(2026, 3, 13), close=250.0),
+        PricePoint(date=date(2026, 3, 16), close=252.8),
+    ]
+
+    # 2026-03-15 is a Sunday - resolves to Monday's close, not Friday's.
+    assert close_on_or_after(history, date(2026, 3, 15)).date == date(2026, 3, 16)
+    # An exact trading day resolves to itself.
+    assert close_on_or_after(history, date(2026, 3, 13)).close == pytest.approx(250.0)
+
+
+def test_close_on_or_after_returns_none_past_the_end_of_the_series():
+    # An outcome that hasn't happened yet stays unresolved rather than
+    # being scored against the latest available (stale) price.
+    history = [PricePoint(date=date(2026, 3, 13), close=250.0)]
+
+    assert close_on_or_after(history, date(2030, 1, 1)) is None

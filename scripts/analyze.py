@@ -16,6 +16,13 @@ risk extraction bolted on:
 Both need ANTHROPIC_API_KEY set in .env (same key the API's
 analyze_10k/earnings_call_text options use) - this script reads it via
 the same app.config.get_settings() the API does, not a separate path.
+
+--log-decision records the conclusion (numbers and risk counts only) so
+scripts/resolve_decisions.py can score it against the real price later;
+--use-track-record feeds those past lessons back into the qualitative
+prompts. Both are off by default: the first writes to disk, the second
+changes an LLM prompt, and neither should happen without being asked
+for. See docs/DECISION_LOG.md.
 """
 
 import argparse
@@ -138,6 +145,17 @@ def main() -> int:
         help="override the flat 9%% discount rate with this company's own CAPM-derived "
         "WACC in every valuation method, instead of just showing it as a reference figure",
     )
+    parser.add_argument(
+        "--log-decision", action="store_true",
+        help="append this analysis to the decision log so scripts/resolve_decisions.py "
+        "can score it against the actual price later (numbers and counts only - no "
+        "filing or transcript text is stored)",
+    )
+    parser.add_argument(
+        "--use-track-record", action="store_true",
+        help="inject past lessons from the decision log into the qualitative prompts "
+        "(affects LLM risk weighting only, never the computed valuation)",
+    )
     args = parser.parse_args()
 
     earnings_call_text = None
@@ -177,6 +195,8 @@ def main() -> int:
             analyze_10k=args.analyze_10k,
             earnings_call_text=earnings_call_text,
             anthropic_client=anthropic_client,
+            log_decision=args.log_decision,
+            include_track_record=args.use_track_record,
         )
     except UnknownTickerError as exc:
         print(f"error: unknown ticker '{exc}' (not in the local ticker cache)", file=sys.stderr)

@@ -8,7 +8,9 @@ from app.api.analysis import (
     get_sentiment_classifier,
     get_ticker_map,
 )
+from app.config import get_settings
 from app.main import app
+from app.memory.decision_log import read_records
 from tests.factories import (
     STANDARD_SUBMISSIONS,
     build_mock_market_data_client,
@@ -335,3 +337,67 @@ def test_analyze_endpoint_returns_owner_earnings_and_consensus(client):
         "DCF (H-Model)",
         "Residual Income",
     }
+
+
+@pytest.fixture
+def decision_log(tmp_path, monkeypatch):
+    """Points the endpoint's decision log at a temp file.
+
+    The service reads it from get_settings(), not from a FastAPI
+    dependency, so it is redirected through the environment - without
+    this a test with log_decision=true would append to the developer's
+    real data/decisions.jsonl.
+    """
+    path = tmp_path / "api-decisions.jsonl"
+    monkeypatch.setenv("DECISION_LOG_PATH", str(path))
+    get_settings.cache_clear()
+    yield path
+    get_settings.cache_clear()
+
+
+def test_analyze_endpoint_writes_no_decision_log_by_default(client, decision_log):
+    response = client.post(
+        "/api/v1/analyze",
+        json={"ticker": "TSTX", "market_price": 50.0, "as_of_date": "2026-01-01"},
+    )
+
+    assert response.status_code == 200
+    assert not decision_log.exists()
+
+
+def test_analyze_endpoint_logs_the_decision_when_asked(client, decision_log):
+    response = client.post(
+        "/api/v1/analyze",
+        json={
+            "ticker": "TSTX",
+            "market_price": 50.0,
+            "as_of_date": "2026-01-01",
+            "log_decision": True,
+        },
+    )
+
+    assert response.status_code == 200
+    records, warnings = read_records(decision_log)
+    assert warnings == []
+    assert len(records) == 1
+    assert records[0].ticker == "TSTX"
+    assert records[0].market_price == 50.0
+    assert records[0].as_of_date.isoformat() == "2026-01-01"
+    assert records[0].margin_of_safety == response.json()["margin_of_safety"]["margin_of_safety"]
+
+
+def test_analyze_endpoint_warns_when_a_track_record_was_requested_but_is_empty(
+    client, decision_log
+):
+    response = client.post(
+        "/api/v1/analyze",
+        json={
+            "ticker": "TSTX",
+            "market_price": 50.0,
+            "as_of_date": "2026-01-01",
+            "include_track_record": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert any("no reflections" in w for w in response.json()["warnings"])

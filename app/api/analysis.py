@@ -122,7 +122,11 @@ class AnalyzeRequest(BaseModel):
     # other field - is written to a database, a file, or a log anywhere
     # in this app, so it (and any personal information a caller pastes
     # into earnings_call_text) does not outlive the request/response
-    # cycle it was submitted in.
+    # cycle it was submitted in. log_decision below is the one thing that
+    # writes to disk at all, and it deliberately cannot carry any of
+    # this: it stores numbers, the ticker, and risk counts by severity -
+    # never this key, never earnings_call_text, never a risk label or a
+    # quote from one. See app/memory/models.py.
     anthropic_api_key: SecretStr | None = None
     # Estimates discount_rate (WACC) per-company from real market data
     # (Damodaran's bottom-up industry beta + synthetic-rating cost of
@@ -147,6 +151,21 @@ class AnalyzeRequest(BaseModel):
     # the requested discount_rate (with a warning) if WACC can't be
     # computed for this company - never fails the whole request over it.
     use_wacc_as_discount_rate: bool = False
+    # Appends this analysis to the decision log (app/memory/) so
+    # scripts/resolve_decisions.py can score it against the actual price
+    # at a later horizon. Off by default because it is the only part of
+    # this endpoint that touches the filesystem - and on a deployment
+    # with an ephemeral disk (Render's free plan, any container without a
+    # mounted volume) the log is lost on restart, so it is worth setting
+    # only where the disk survives. See docs/LIMITATIONS.md.
+    log_decision: bool = False
+    # Injects lessons written by past reflections into the qualitative
+    # prompts. Strictly a prompt change: it reaches the LLM's risk
+    # weighting and nothing else - assumptions and margin_of_safety are
+    # computed from filing data before this value is even read, which
+    # tests/unit/test_analysis_service_decision_log.py asserts directly
+    # by running the same analysis both ways and comparing the numbers.
+    include_track_record: bool = False
 
 
 class AnalyzeResponse(BaseModel):
@@ -232,6 +251,8 @@ def analyze_ticker(
             compute_comps=request.compute_comps,
             use_wacc_as_discount_rate=request.use_wacc_as_discount_rate,
             market_data_client=market_data_client,
+            log_decision=request.log_decision,
+            include_track_record=request.include_track_record,
         )
     except SECClientError as exc:
         status_code = _ERROR_STATUS.get(type(exc), _DEFAULT_SEC_ERROR_STATUS)

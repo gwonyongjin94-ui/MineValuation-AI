@@ -650,6 +650,26 @@ if `wacc_estimate.wacc` can't be computed for this company (e.g. no
 would violate `terminal_growth_rate < discount_rate` - never fails the
 whole request over it.
 
+## The decision log stays outside the math entirely
+
+`include_track_record` injects lessons written by past reflections into
+the qualitative extraction prompt (see [DECISION_LOG.md](DECISION_LOG.md)).
+It is *not* a second exception alongside `use_wacc_as_discount_rate`,
+and the distinction is worth being precise about: a WACC override
+replaces one validated number with another validated number, derived
+from CAPM and market data, in a formula documented above. A lesson is
+free text an LLM wrote about earlier mistakes. There is no formula it
+could legitimately enter.
+
+So it enters none. `assumptions`, every DCF variant, the consensus, and
+`margin_of_safety` are all computed from filing data and are
+bit-identical whether or not a track record was supplied - asserted in
+`tests/unit/test_analysis_service_decision_log.py` by running the same
+analysis both ways and comparing the numbers. What a lesson can change
+is how strictly the model weighs a candidate qualitative risk, which
+lands in `qualitative_analyses` - a list that section 4 above already
+establishes is never merged into MOS numerically.
+
 ## Defaults at the API boundary
 
 `app/api/analysis.py` defines `DEFAULT_ASSUMPTIONS` (5% FCFF growth,

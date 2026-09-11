@@ -10,7 +10,15 @@ app/data/            SEC access + raw-fact schema (FinancialFact, FinancialState
 app/financials/      raw facts -> normalized statement -> pure analysis metrics
 app/valuation/        FCFF -> DCF -> margin of safety
 app/qualitative/      V2: LLM risk extraction + FinBERT sentiment, from raw text
+app/memory/          append-only decision log: what we concluded, what happened, what we learned
 ```
+
+`app/memory/` sits outside the stack rather than in it - it is a leaf
+that imports only `app/valuation/assumptions.py` (through the record
+schema). Nothing in the valuation path reads it, and
+`analysis_service.py` writes to it only as the last step of a completed
+analysis, so removing the package entirely would change no number this
+project computes.
 
 Each layer only knows about the layer directly below it, and none of
 `app/data`, `app/financials`, or `app/valuation` import anything from
@@ -105,6 +113,9 @@ list[YearMetrics]                  compute_fcff_series() -> select_base_fcff()
 | `qualitative/sentiment.py` | Text -> FinBERT sentence-level sentiment | Fetch text, know its source |
 | `services/analysis_service.py` | Call the above in order, assemble one result | Know about HTTP status codes |
 | `api/analysis.py` | Request/response models, error -> HTTP status | Compute anything |
+| `memory/models.py` | Schema for the three decision-log record kinds | Store any filing/transcript text - risks are reduced to counts by severity |
+| `memory/decision_log.py` | Append-only JSONL read/write, replay-and-join queries, track-record formatting | Import anything above `app/valuation/assumptions.py` - it must stay importable from a bare script |
+| `memory/reflection.py` | Score a decision against later prices (`resolve_outcome`, pure); ask an LLM what to learn (`write_reflection`) | Get called from the request path - only `scripts/resolve_decisions.py` invokes the LLM half |
 
 ## Why FCFF/DCF is not always run
 

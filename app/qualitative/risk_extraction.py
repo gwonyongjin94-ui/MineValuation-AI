@@ -68,11 +68,26 @@ For each risk, also provide:
   a candidate risk, do not include that risk at all.
 - grounding: "explicit" if the text directly states this as a risk, or "inferred" if you
   are drawing a reasonable conclusion that goes beyond what is literally stated.
-
+{track_record_block}
 Text follows:
 ---
 {text}
 ---
+"""
+
+# Wraps the lessons block so the "use ONLY the text below" rule above and
+# the track record can't be read as contradicting each other: the lessons
+# may change how strictly risks are weighed, never what counts as
+# evidence. The supporting_quote requirement enforces this structurally
+# too - every returned risk still needs a verbatim quote from the filing,
+# so a lesson alone can never manufacture one.
+_TRACK_RECORD_TEMPLATE = """
+{track_record}
+
+Use the lessons above only to calibrate how strictly you weigh candidate risks in the
+text below - for example, being more or less demanding about what counts as material.
+They are not evidence, they are not about this filing, and no risk may be reported
+unless the text below independently supports it with a verbatim quote.
 """
 
 _TOOL = {
@@ -163,7 +178,17 @@ def extract_risks(
     source_label: str,
     source_accession_number: str | None = None,
     model: str = DEFAULT_MODEL,
+    track_record: str | None = None,
 ) -> QualitativeRiskAnalysis:
+    """`track_record` is the optional lessons block from the decision log
+    (app/memory/decision_log.py's format_track_record()) - this system's
+    own past calibration, never facts about the company. Omitted
+    entirely when None, so a request without it sends byte-for-byte the
+    same prompt this function always sent.
+    """
+    track_record_block = (
+        _TRACK_RECORD_TEMPLATE.format(track_record=track_record) if track_record else ""
+    )
     response = client.messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
@@ -173,7 +198,10 @@ def extract_risks(
             {
                 "role": "user",
                 "content": _PROMPT.format(
-                    source_label=source_label, max_risks=MAX_RISKS, text=text
+                    source_label=source_label,
+                    max_risks=MAX_RISKS,
+                    text=text,
+                    track_record_block=track_record_block,
                 ),
             }
         ],
@@ -229,6 +257,7 @@ def run_cross_model_extraction(
     source_label: str,
     source_accession_number: str | None = None,
     models: tuple[str, ...] = CROSS_VALIDATION_MODELS,
+    track_record: str | None = None,
 ) -> CrossModelRiskAnalysis:
     # One model failing (rate limit, degenerate output, truncation) doesn't
     # invalidate the other's result - a partial cross-check is still useful,
@@ -239,7 +268,14 @@ def run_cross_model_extraction(
     for model in models:
         try:
             analyses.append(
-                extract_risks(client, text, source_label, source_accession_number, model=model)
+                extract_risks(
+                    client,
+                    text,
+                    source_label,
+                    source_accession_number,
+                    model=model,
+                    track_record=track_record,
+                )
             )
         except QualitativeAnalysisError as exc:
             failed_models.append(f"{model}: {exc}")
