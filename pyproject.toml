@@ -17,7 +17,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
-    "ruff>=0.6",
+    # Upper-bounded deliberately. This project has no explicit `select`,
+    # so the rule set IS whatever ruff's defaults are - and 0.17 dropped
+    # flake8-datetimez (DTZ) from them. CI installed 0.17.3, decided the
+    # four `# noqa: DTZ011` comments on intentional calendar-date
+    # defaults were unused, and failed RUF100 on code that passed
+    # locally on 0.16.3. An unpinned linter means CI lints something
+    # different from what the developer ran. Moving to 0.17 means
+    # declaring `select` explicitly rather than inheriting defaults;
+    # until then, pin.
+    "ruff>=0.16,<0.17",
 ]
 # Heavy (~1GB incl. model weights) and only needed for local FinBERT
 # sentiment scoring - kept out of the base install and out of CI.
