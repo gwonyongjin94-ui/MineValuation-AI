@@ -17,16 +17,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2",
-    # Upper-bounded deliberately. This project has no explicit `select`,
-    # so the rule set IS whatever ruff's defaults are - and 0.17 dropped
-    # flake8-datetimez (DTZ) from them. CI installed 0.17.3, decided the
-    # four `# noqa: DTZ011` comments on intentional calendar-date
-    # defaults were unused, and failed RUF100 on code that passed
-    # locally on 0.16.3. An unpinned linter means CI lints something
-    # different from what the developer ran. Moving to 0.17 means
-    # declaring `select` explicitly rather than inheriting defaults;
-    # until then, pin.
-    "ruff>=0.16,<0.17",
+    # No upper bound: `[tool.ruff.lint] select` below names the rule set
+    # explicitly, so a ruff upgrade no longer silently changes which rules
+    # run. See the comment there.
+    "ruff>=0.17",
 ]
 # Heavy (~1GB incl. model weights) and only needed for local FinBERT
 # sentiment scoring - kept out of the base install and out of CI.
@@ -40,9 +34,96 @@ sentiment = [
 line-length = 100
 
 [tool.ruff.lint]
-# B008: FastAPI's Depends()-as-default-argument is the documented DI
-# pattern, not the mutable-default-argument bug this rule targets.
-ignore = ["B008"]
+# The rule set is declared here rather than inherited from ruff's defaults,
+# because those defaults move between releases. 0.17 dropped
+# flake8-datetimez (DTZ) from them, which turned this project's four
+# reasoned `# noqa: DTZ011` comments on deliberate calendar-date defaults
+# into RUF100 "unused noqa" errors - CI failed on code that linted clean
+# locally on 0.16.3. With `select` explicit, an upgrade can only add rules
+# when we ask it to, and CI lints exactly what the developer ran.
+#
+# This list reproduces the set ruff 0.16.3 enabled by default (captured
+# with `ruff check --show-settings`), widened to the whole family wherever
+# the default already was the whole family or all but a few rules of it.
+# Families whose default was a narrow curated slice - pydocstyle, bandit,
+# flake8-pathlib, pep8-naming, flake8-pytest-style, pycodestyle, and
+# Pylint's complexity metrics - are listed rule by rule instead: adopting
+# those wholesale is a separate decision from making this one explicit.
+select = [
+    "F",        # Pyflakes
+    "E722",     # bare `except`
+    "E9",       # syntax/IO errors
+    "W6",       # invalid escape sequence
+    "I",        # isort
+    "N9",       # invalid module name
+    "D419",     # empty docstring
+    "UP",       # pyupgrade
+    "YTT",      # flake8-2020
+    "ASYNC",    # flake8-async
+    "S102",     # exec
+    "S110",     # try-except-pass
+    "S112",     # try-except-continue
+    "BLE",      # flake8-blind-except
+    "B",        # flake8-bugbear
+    "C4",       # flake8-comprehensions
+    "DTZ",      # flake8-datetimez - the four `noqa: DTZ011` sites rely on this
+    "T10",      # flake8-debugger
+    "EXE",      # flake8-executable
+    "FA",       # flake8-future-annotations
+    "ISC",      # flake8-implicit-str-concat
+    "G",        # flake8-logging-format
+    "PIE",      # flake8-pie
+    "PT010",    # pytest.raises without an expected exception
+    "PT014",    # duplicate parametrize test case
+    "PT020",    # deprecated yield_fixture
+    "PT025",    # erroneous usefixtures on fixture
+    "PT026",    # useless usefixtures
+    "PT031",    # pytest.warns block holding too much
+    "RET501",   # unnecessary `return None`
+    "SIM",      # flake8-simplify
+    "TC",       # flake8-type-checking
+    "INT",      # flake8-gettext
+    "PTH124",   # py.path
+    "PTH210",   # invalid pathlib suffix
+    "TRY",      # tryceratops
+    "FLY",      # flynt
+    "PERF",     # Perflint
+    "FURB",     # refurb
+    "LOG",      # flake8-logging
+    "PLC",      # Pylint convention
+    "PLE",      # Pylint error
+    "PLW",      # Pylint warning
+    "PLR01",    # Pylint refactor - comparison/import smells
+    "PLR02",    # Pylint refactor - redefined argument from local
+    "PLR04",    # Pylint refactor - manual from-import
+    "PLR1",     # Pylint refactor - simplifiable statements
+    "PLR2044",  # empty comment
+    "PYI",      # flake8-pyi
+    "RUF",      # Ruff-specific, incl. RUF100 unused-noqa
+    "PGH",      # pygrep-hooks
+]
+ignore = [
+    # FastAPI's Depends()-as-default-argument is the documented DI pattern,
+    # not the mutable-default-argument bug this rule targets.
+    "B008",
+    # Descriptive messages at the raise site are this project's style; the
+    # alternative is a custom exception class per message.
+    "TRY003",
+    # `class X(str, Enum)` is deliberate - StrEnum is not a drop-in swap.
+    # Under the mixin `str(X.a)` and f-strings give "X.a"; under StrEnum
+    # they give "a", which would quietly change log lines and any message
+    # built by interpolation. (JSON output is the same either way.)
+    "UP042",
+    # Function-level imports are deliberate for the optional [sentiment]
+    # extra - importing transformers/torch at module scope would make a
+    # ~1GB dependency mandatory.
+    "PLC0415",
+    # Inlining the lambda is wrong for a FastAPI dependency_overrides
+    # value: FastAPI introspects the override's signature, so a bare
+    # reference to build_mock_market_data_client(risk_free_rate_pct=4.50)
+    # would turn that default into a request query parameter.
+    "PLW0108",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

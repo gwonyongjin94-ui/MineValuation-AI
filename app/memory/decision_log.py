@@ -52,8 +52,8 @@ def read_records(path: Path) -> tuple[list[Record], list[str]]:
     records: list[Record] = []
     warnings: list[str] = []
     with path.open(encoding="utf-8") as f:
-        for line_number, line in enumerate(f, start=1):
-            line = line.strip()
+        for line_number, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
             if not line:
                 continue
             try:
