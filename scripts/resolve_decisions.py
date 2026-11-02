@@ -34,7 +34,12 @@ from app.memory.decision_log import (
     pending_resolution,
     read_records,
 )
-from app.memory.reflection import DEFAULT_HORIZON_DAYS, resolve_outcome, write_reflection
+from app.memory.reflection import (
+    DEFAULT_HORIZON_DAYS,
+    history_range_for,
+    resolve_outcome,
+    write_reflection,
+)
 
 
 def main() -> int:
@@ -71,6 +76,13 @@ def main() -> int:
     # One price history per ticker, not per decision - several decisions
     # on the same company are the normal case once this log has any age.
     market_data_client = build_default_market_data_client()
+    # Sized to the OLDEST decision in the queue, not left at the default.
+    # A fixed 2-year range made close_on_or_after() return the same first
+    # close for both endpoints of anything older, which resolved to an
+    # exactly-0.00% return instead of refusing - 360 of 600 cells in the
+    # first backtest run.
+    history_range = history_range_for(due[0].as_of_date, today, args.horizon)
+    print(f"fetching {history_range} of daily closes per ticker")
     history_by_ticker: dict[str, list] = {}
     resolved_count = 0
     try:
@@ -78,7 +90,7 @@ def main() -> int:
             if decision.ticker not in history_by_ticker:
                 try:
                     history_by_ticker[decision.ticker] = fetch_price_history(
-                        decision.ticker, market_data_client
+                        decision.ticker, market_data_client, range_=history_range
                     )
                 except MarketDataError as exc:
                     print(f"  {decision.ticker}: price history unavailable ({exc})")

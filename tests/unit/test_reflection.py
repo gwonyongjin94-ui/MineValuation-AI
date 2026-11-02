@@ -5,7 +5,7 @@ import pytest
 
 from app.data.market_data import PricePoint
 from app.memory.models import Stance
-from app.memory.reflection import resolve_outcome, write_reflection
+from app.memory.reflection import history_range_for, resolve_outcome, write_reflection
 from tests.unit.test_decision_log import make_decision, make_outcome
 
 
@@ -272,3 +272,50 @@ def test_closes_observed_exposes_a_window_too_sparse_to_trust():
     outcome = resolve_outcome(decision, prices, 90)
 
     assert outcome.closes_observed == 2
+
+
+def test_both_endpoints_snapping_to_one_close_refuses_instead_of_reporting_zero():
+    # The real failure: the resolver fetched a 2-year history for
+    # decisions up to 5 years old, so close_on_or_after() returned its
+    # first point for both ends and 360 of 600 backtest cells resolved
+    # to an exactly-0.00% return. Refusing leaves them resolvable later.
+    decision = make_decision(as_of_date=date(2021, 1, 1))
+    too_short = history(("2025-01-02", 100.0), ("2025-06-02", 150.0))
+
+    assert resolve_outcome(decision, too_short, 90) is None
+
+
+def test_a_window_with_two_distinct_closes_still_resolves():
+    # The guard must reject only same-point windows, not thin ones.
+    decision = make_decision(as_of_date=date(2025, 1, 1))
+    thin = history(("2025-01-02", 100.0), ("2025-04-02", 110.0))
+
+    outcome = resolve_outcome(decision, thin, 90)
+
+    assert outcome is not None
+    assert outcome.return_pct == pytest.approx(0.1)
+
+
+def test_history_range_grows_with_the_oldest_pending_decision():
+    today = date(2026, 11, 2)
+
+    assert history_range_for(date(2026, 8, 1), today, 90) == "1y"
+    assert history_range_for(date(2025, 6, 1), today, 90) == "2y"
+    assert history_range_for(date(2023, 1, 1), today, 90) == "5y"
+    assert history_range_for(date(2019, 1, 1), today, 90) == "10y"
+
+
+def test_history_range_caps_at_ten_years_rather_than_asking_for_max():
+    # range=max returns MONTHLY closes without saying so, which would
+    # silently understate every drawdown measured from it.
+    assert history_range_for(date(1995, 1, 1), date(2026, 11, 2), 90) == "10y"
+
+
+def test_history_range_accounts_for_the_horizon_not_just_the_decision_date():
+    # A decision just under a year old still needs closes past its
+    # horizon, which can push it into the next range up.
+    today = date(2026, 11, 2)
+    almost_a_year = date(2025, 12, 1)
+
+    assert history_range_for(almost_a_year, today, 0) == "1y"
+    assert history_range_for(almost_a_year, today, 180) == "2y"

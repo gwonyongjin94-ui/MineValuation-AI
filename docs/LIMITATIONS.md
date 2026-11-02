@@ -472,6 +472,36 @@ as a starting point for analysis, not a verdict. Grouped by layer.
   layer: no SLA, no guarantee of continued availability, and splits or
   ticker changes are not reconciled against the decision's as-of date.
 
+## Backtest (V12)
+
+- **The default universe is today's index membership.** Today's DJIA 30
+  was selected partly for having done well, so every raw return in the
+  sample is inflated. Historical index membership is not freely
+  available, so this is not fixed - it is worked around by making
+  excess-return-vs-same-date-peers the headline, which cancels the
+  common component. Raw return columns remain biased upward; read them
+  as context, not as results.
+- **`compute_wacc` and `compute_comps` cannot be backtested at all.**
+  They fetch today's Treasury yield and today's peer prices. The
+  point-in-time filter does not help, because neither reads financial
+  statements. Any conclusion about a backtest run therefore applies to
+  DCF(FCFF) / Owner Earnings / H-Model / Residual Income only.
+- **FX conversion uses the current spot rate**, so a non-USD filer
+  (Form 20-F, e.g. NVO) cannot be backtested honestly either - the
+  conversion itself is look-ahead. Keep backtest universes to USD
+  filers until a historical FX series is wired in.
+- **One flat assumption set across every company.** A backtest run uses
+  `DEFAULT_ASSUMPTIONS` for all tickers, so it measures that
+  configuration, not the DCF method and not a per-company calibration.
+- **Significance is not computed, and an ordinary test would be wrong.**
+  Same-date equity returns are dominated by one market factor, so the
+  effective sample size is nearer the number of distinct decision dates
+  than the number of cells. The report prints spreads and sample sizes
+  deliberately, and no p-value.
+- **Daily price history stops at 10 years.** Yahoo's `range=max`
+  switches to monthly closes without announcing it, which silently
+  understates every drawdown measured from it, so `--years` is capped.
+
 ## Scope, generally
 
 - No portfolio management, trade execution, or stock screening/

@@ -25,6 +25,11 @@ DEFAULT_HORIZON_DAYS = 90
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 1024
 
+# Ranges Yahoo's chart endpoint serves at daily granularity. "max" is
+# deliberately absent: it switches to monthly closes without saying so,
+# which understates every drawdown computed from it.
+_DAILY_RANGES = ((1, "1y"), (2, "2y"), (5, "5y"), (10, "10y"))
+
 _PROMPT = """You are reviewing one past equity analysis produced by an automated
 valuation system, to write a calibration lesson for its future analyses.
 
@@ -95,6 +100,17 @@ def resolve_outcome(
     end = close_on_or_after(history, target_date)
     if start is None or end is None or start.close == 0:
         return None
+    # Both endpoints snapping to the same close means the horizon didn't
+    # elapse inside the series we were handed - typically a history that
+    # starts after the decision date, so close_on_or_after() returned its
+    # first point twice. Caught for real: a 600-cell backtest resolved
+    # 360 cells to exactly 0.00% return because the resolver fetched a
+    # default 2-year history for decisions up to 5 years old. Refusing is
+    # the only honest answer; reporting a 0% return invents a fact, and
+    # the decision stays unresolved so a later run with enough history
+    # can score it properly.
+    if end.date <= start.date:
+        return None
 
     return_pct = (end.close - start.close) / start.close
     window = [p for p in history if start.date <= p.date <= end.date]
@@ -123,6 +139,22 @@ def resolve_outcome(
         trough_date=drawdown[1].date if drawdown else None,
         closes_observed=len(window),
     )
+
+
+def history_range_for(oldest_as_of: date, today: date, horizon_days: int) -> str:
+    """The shortest daily-granularity range that still covers a decision
+    made on `oldest_as_of` plus its horizon.
+
+    The resolver used to take the default 2-year range regardless of how
+    old the pending decisions were, which silently scored everything
+    older than that against a single price point.
+    """
+    span_days = (today - oldest_as_of).days + horizon_days
+    years_needed = span_days / 365
+    for years, label in _DAILY_RANGES:
+        if years >= years_needed:
+            return label
+    return _DAILY_RANGES[-1][1]
 
 
 def _format_optional(value: float | None, prefix: str = "$") -> str:

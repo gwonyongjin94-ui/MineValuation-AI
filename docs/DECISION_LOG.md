@@ -140,6 +140,73 @@ question asked.
 them either way would pollute the calibration the lessons are drawn
 from. "We declined to value this" is still worth counting.
 
+## Backtesting: the answer the live log can't give yet
+
+The live log answers "is this system right" only after years of
+waiting. A backtest answers it now, from history the SEC and Yahoo
+already hold.
+
+```bash
+python scripts/backtest.py --years 5 --every 91
+DECISION_LOG_PATH=data/backtest.jsonl python scripts/resolve_decisions.py --no-reflect
+python scripts/backtest_report.py --log data/backtest.jsonl
+```
+
+No LLM is called, so the whole run is free. It writes to
+`data/backtest.jsonl` rather than the live log, because a simulated
+conclusion should not sit in the same file as a real one.
+
+**`compute_wacc` and `compute_comps` are off during a backtest and must
+stay off.** Neither reads financial statements, so the point-in-time
+filter does not protect them: `compute_wacc` fetches today's 10-year
+Treasury yield, and `compute_comps` applies peers' *current* prices as
+multiples. Against a 2021 decision date both are tomorrow's information
+informing yesterday's valuation. A backtest with them enabled would
+look more sophisticated and measure nothing.
+
+The report's headline is **excess** return — each decision against the
+equal-weighted mean of every *other* decision on the same date,
+leave-one-out so a cell is never part of its own benchmark. This is the
+only honest framing: over 2021-2026 nearly everything in a large-cap US
+universe rose, so "calls of overvalued were wrong" is a fact about the
+market. The question a backtest can answer is whether the names this
+tool liked beat the names it disliked over the same windows.
+
+### What the first run found
+
+DJIA 30, quarterly decision dates over 5 years, 600 decisions, 439 with
+a margin of safety (161 unsupported — banks and missing FCFF inputs):
+
+| Horizon | Spearman(MOS, excess return) | Directional hit rate |
+|---|---|---|
+| 90 days | +0.032 | 47% |
+| 365 days | +0.042 | 43% |
+
+No gradient across margin-of-safety buckets at either horizon, and the
+bucket ordering is incoherent (at 365 days the best excess return came
+from the −100%..−50% bucket, the worst from −50%..−25%), which is what
+noise looks like. **With default assumptions, at these horizons, on
+this universe, the margin of safety has no detectable predictive
+power.**
+
+Three things that result does *not* say:
+
+- Not "DCF doesn't work." The run used one flat set of assumptions (9%
+  discount, 5% growth) for all 30 companies, with the tool's own
+  per-company reference figures deliberately disabled. It tests this
+  configuration, not the method.
+- Not "no edge exists anywhere." DJIA mega-caps are the most heavily
+  covered, most efficiently priced segment of the market — the least
+  likely place for a public-filings valuation to find mispricing.
+- Not a significance test. Same-date stock returns are dominated by one
+  market factor, so the effective sample is nearer the 20 distinct
+  dates than the 439 cells.
+
+A real finding worth separating out: median excess return is negative
+(−1.06% at 90 days) while the mean is exactly zero by construction.
+That is positive skew, not a defect — most names underperform the
+average because a few large winners carry it.
+
 ## Where it lives
 
 `data/decisions.jsonl` by default, overridable with `DECISION_LOG_PATH`.
