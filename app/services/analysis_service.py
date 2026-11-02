@@ -43,6 +43,7 @@ from app.financials.normalizer import (
     normalize,
     statement_currency,
 )
+from app.financials.point_in_time import filter_look_ahead
 from app.memory.decision_log import (
     append_record,
     format_track_record,
@@ -252,6 +253,24 @@ def analyze(
         for statement in statements
         for warning in statement.warnings
     ]
+
+    # Everything below this line sees only what was public on
+    # as_of_date, with restatements resolved as of then. Applied once,
+    # here, rather than inside any single valuation method: this used to
+    # live in compute_margin_of_safety(), which meant margin_of_safety
+    # was point-in-time correct while Owner Earnings, H-Model, Residual
+    # Income, Comps, WACC and the growth estimate all silently read the
+    # unfiltered list. Invisible at as_of_date=today (everything filed
+    # is public) and ruinous for a historical run - measured on real
+    # data at as_of_date=2020-01-01, where margin_of_safety used a base
+    # FCFF of $48.2B (FY2017-19) and the H-Model used $101.5B
+    # (FY2023-25, six years it could not have known).
+    statements, excluded_look_ahead = filter_look_ahead(statements, as_of_date)
+    if excluded_look_ahead:
+        warnings.append(
+            f"excluded {excluded_look_ahead} financial statement(s) filed after "
+            f"{as_of_date.isoformat()} from every valuation method, to avoid look-ahead bias"
+        )
 
     # An IFRS foreign private issuer (Form 20-F, e.g. NVO) reports its
     # financials in its home currency, not USD - `market_price` is always

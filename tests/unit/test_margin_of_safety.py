@@ -5,12 +5,7 @@ import pytest
 from app.data.models import FinancialStatement
 from app.valuation.assumptions import BaseFCFMethod, ValuationAssumptions
 from app.valuation.dcf import UnsupportedValuationError
-from app.valuation.margin_of_safety import (
-    _margin_of_safety,
-    _resolve_fact_as_of,
-    _resolve_statement_as_of,
-    compute_margin_of_safety,
-)
+from app.valuation.margin_of_safety import _margin_of_safety, compute_margin_of_safety
 from tests.factories import DEFAULT_COMPANY, make_fact, make_statement
 
 
@@ -103,59 +98,6 @@ def test_margin_of_safety_none_when_intrinsic_value_missing():
 
     assert result.intrinsic_value_per_share is None
     assert result.margin_of_safety is None
-
-
-# --- restatement-aware as-of-date resolution ---
-# HBB's FY2019 revenue: $612,843,000 as originally reported (10-K, filed
-# 2020-02-26), restated to $611,786,000 in a 10-K/A filed 2020-07-24 - the
-# real numbers from docs/DATA_SPIKE_NOTES.md, reused here as the shape of
-# a genuine restatement.
-
-
-def test_resolve_fact_as_of_uses_as_reported_before_restatement_filed():
-    as_reported = make_fact(
-        "revenue", 612843000, "2019-12-31", 2019, filed_date="2020-02-26", accession_number="ORIG"
-    )
-    restated = make_fact(
-        "revenue", 611786000, "2019-12-31", 2019, filed_date="2020-07-24", form="10-K/A",
-        accession_number="AMEND",
-    )
-
-    resolved = _resolve_fact_as_of(as_reported, [restated], date(2020, 6, 1))
-
-    assert resolved.value == 612843000
-
-
-def test_resolve_fact_as_of_uses_restated_value_once_public():
-    as_reported = make_fact(
-        "revenue", 612843000, "2019-12-31", 2019, filed_date="2020-02-26", accession_number="ORIG"
-    )
-    restated = make_fact(
-        "revenue", 611786000, "2019-12-31", 2019, filed_date="2020-07-24", form="10-K/A",
-        accession_number="AMEND",
-    )
-
-    resolved = _resolve_fact_as_of(as_reported, [restated], date(2020, 8, 1))
-
-    assert resolved.value == 611786000
-
-
-def test_resolve_fact_as_of_none_before_anything_filed():
-    as_reported = make_fact(
-        "revenue", 612843000, "2019-12-31", 2019, filed_date="2020-02-26", accession_number="ORIG"
-    )
-
-    resolved = _resolve_fact_as_of(as_reported, [], date(2019, 12, 31))
-
-    assert resolved is None
-
-
-def test_resolve_statement_as_of_excludes_statement_with_nothing_public_yet():
-    statement = make_statement(2019, "2019-12-31", revenue=612843000)
-
-    resolved = _resolve_statement_as_of(statement, date(2000, 1, 1))
-
-    assert resolved is None
 
 
 def _statement_with_restated_operating_income() -> FinancialStatement:

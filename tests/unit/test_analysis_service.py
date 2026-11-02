@@ -619,3 +619,67 @@ def test_analyze_use_wacc_as_discount_rate_overrides_discount_rate(tmp_path):
     assert result.margin_of_safety.dcf.assumptions.discount_rate == pytest.approx(wacc.wacc)
     assert result.h_model_estimate.dcf.assumptions.discount_rate == pytest.approx(wacc.wacc)
     assert any("discount_rate overridden with CAPM-derived WACC" in w for w in result.warnings)
+
+
+def _company_facts_with_an_earlier_year():
+    """standard_company_facts() plus an FY2022 filed 2023-02-01.
+
+    Three fiscal years, so excluding the latest one still leaves two -
+    enough for FCFF, which needs a prior year for the change in net
+    working capital.
+    """
+    facts = standard_company_facts()
+    for tag_facts in facts["facts"]["us-gaap"].values():
+        entries = tag_facts["units"]["USD"]
+        earliest = min(entries, key=lambda e: e["fy"])
+        clone = dict(earliest)
+        clone.update(
+            fy=2022, end="2022-12-31", filed="2023-02-01", accn="A-2022",
+            val=earliest["val"] * 0.9,
+        )
+        if "start" in clone:
+            clone["start"] = "2022-01-01"
+        entries.insert(0, clone)
+    return facts
+
+
+def test_every_valuation_method_sees_only_data_public_at_as_of_date(tmp_path):
+    # Regression: the look-ahead filter used to live inside
+    # compute_margin_of_safety(), so margin_of_safety was point-in-time
+    # correct while Owner Earnings, H-Model, Residual Income, Comps,
+    # WACC and the growth estimate silently read the unfiltered list.
+    # Measured on real AAPL data at as_of_date=2020-01-01:
+    # margin_of_safety used a base FCFF of $48.2B (FY2017-19) while the
+    # H-Model used $101.5B (FY2023-25) - six years it could not know.
+    # standard_company_facts() files FY2023 on 2024-02-01 and FY2024 on
+    # 2025-02-01, so this as_of_date sits between the two filings.
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2024, 6, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, _company_facts_with_an_earlier_year()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+    )
+
+    assert [s.fiscal_year for s in result.financials] == [2022, 2023]
+    assert any("look-ahead bias" in w for w in result.warnings)
+    # The whole point: every method agrees on the base, because every
+    # method got the same point-in-time statements.
+    base = result.margin_of_safety.dcf.base_fcff
+    assert result.h_model_estimate.dcf.base_fcff == pytest.approx(base)
+
+
+def test_an_as_of_date_before_any_filing_is_unsupported_not_a_silent_valuation(tmp_path):
+    result = analyze(
+        ticker="TSTX",
+        market_price=50.0,
+        as_of_date=date(2020, 1, 1),
+        assumptions=_assumptions(),
+        client=build_mock_sec_client(STANDARD_SUBMISSIONS, standard_company_facts()),
+        ticker_map=build_ticker_map_with_cache(tmp_path, {"TSTX": 999999}),
+    )
+
+    assert result.financials == []
+    assert result.margin_of_safety is None
+    assert result.unsupported_reason
