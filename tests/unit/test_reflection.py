@@ -1,6 +1,8 @@
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from app.data.market_data import PricePoint
 from app.memory.models import Stance
 from app.memory.reflection import resolve_outcome, write_reflection
@@ -192,3 +194,81 @@ def test_write_reflection_renders_a_decision_with_no_computable_numbers():
     prompt = client.messages.calls[0]["messages"][0]["content"]
     assert "not computable" in prompt
     assert "declined to value" in prompt
+
+
+def test_drawdown_is_measured_against_the_running_high_not_the_entry_price():
+    # Entry 100, rises to 150, falls to 90, ends at 120. Measured from
+    # entry the worst is -10%; measured from the running high it is -40%,
+    # which is what holding it actually felt like.
+    decision = make_decision(as_of_date=date(2025, 1, 1))
+    prices = history(
+        ("2025-01-02", 100.0),
+        ("2025-02-01", 150.0),
+        ("2025-03-01", 90.0),
+        ("2025-04-02", 120.0),
+    )
+
+    outcome = resolve_outcome(decision, prices, 90)
+
+    assert outcome.return_pct == pytest.approx(0.2)
+    assert outcome.max_drawdown_pct == pytest.approx(-0.4)
+    assert outcome.trough_close == 90.0
+    assert outcome.trough_date == date(2025, 3, 1)
+
+
+def test_point_to_point_return_hides_a_drawdown_the_record_now_keeps():
+    # The case the field exists for: identical return_pct, completely
+    # different holding experience.
+    decision = make_decision(as_of_date=date(2025, 1, 1))
+    calm = history(("2025-01-02", 100.0), ("2025-02-15", 101.0), ("2025-04-02", 100.0))
+    violent = history(("2025-01-02", 100.0), ("2025-02-15", 60.0), ("2025-04-02", 100.0))
+
+    calm_outcome = resolve_outcome(decision, calm, 90)
+    violent_outcome = resolve_outcome(decision, violent, 90)
+
+    assert calm_outcome.return_pct == violent_outcome.return_pct == pytest.approx(0.0)
+    assert calm_outcome.max_drawdown_pct == pytest.approx(-0.0099, abs=1e-4)
+    assert violent_outcome.max_drawdown_pct == pytest.approx(-0.4)
+
+
+def test_a_window_that_only_rises_has_a_zero_drawdown_not_none():
+    # 0.0 means "measured, nothing was lost"; None means "not
+    # measurable". Collapsing them would make a clean run look like
+    # missing data.
+    decision = make_decision(as_of_date=date(2025, 1, 1))
+    prices = history(("2025-01-02", 100.0), ("2025-02-01", 110.0), ("2025-04-02", 130.0))
+
+    outcome = resolve_outcome(decision, prices, 90)
+
+    assert outcome.max_drawdown_pct == 0.0
+    assert outcome.trough_close == 100.0
+
+
+def test_drawdown_only_considers_closes_inside_the_holding_window():
+    # A crash before the decision, and another after the horizon, are
+    # both somebody else's problem.
+    decision = make_decision(as_of_date=date(2025, 1, 1))
+    prices = history(
+        ("2024-06-01", 10.0),
+        ("2025-01-02", 100.0),
+        ("2025-03-01", 95.0),
+        ("2025-04-02", 120.0),
+        ("2025-06-01", 5.0),
+    )
+
+    outcome = resolve_outcome(decision, prices, 90)
+
+    assert outcome.max_drawdown_pct == pytest.approx(-0.05)
+    assert outcome.closes_observed == 3
+
+
+def test_closes_observed_exposes_a_window_too_sparse_to_trust():
+    # Yahoo's range=max silently returns monthly closes; a drawdown
+    # computed from two points understates the real one and nothing in
+    # max_drawdown_pct would reveal that.
+    decision = make_decision(as_of_date=date(2025, 1, 1))
+    prices = history(("2025-01-02", 100.0), ("2025-04-02", 120.0))
+
+    outcome = resolve_outcome(decision, prices, 90)
+
+    assert outcome.closes_observed == 2

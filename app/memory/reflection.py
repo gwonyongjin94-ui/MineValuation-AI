@@ -54,6 +54,32 @@ tracked across more analyses to find out.
 Reply with the lesson text only, no preamble."""
 
 
+def _max_drawdown(window: list[PricePoint]) -> tuple[float, PricePoint] | None:
+    """Worst peak-to-trough decline within `window`, and where it bottomed.
+
+    Measured against the running high rather than against the entry
+    price, which is the definition that matters for holding something:
+    the pain is relative to what the position was worth at its best, not
+    to what it cost. A window that only ever rises has a drawdown of
+    0.0, which is a real answer - distinct from None, meaning not
+    measurable.
+    """
+    if not window:
+        return None
+    peak = window[0].close
+    worst_pct = 0.0
+    worst_point = window[0]
+    for point in window:
+        peak = max(peak, point.close)
+        if peak <= 0:
+            continue
+        decline = (point.close - peak) / peak
+        if decline < worst_pct:
+            worst_pct = decline
+            worst_point = point
+    return worst_pct, worst_point
+
+
 def resolve_outcome(
     decision: DecisionRecord,
     history: list[PricePoint],
@@ -71,6 +97,8 @@ def resolve_outcome(
         return None
 
     return_pct = (end.close - start.close) / start.close
+    window = [p for p in history if start.date <= p.date <= end.date]
+    drawdown = _max_drawdown(window)
     if decision.stance == Stance.UNDERVALUED:
         directionally_right = return_pct > 0
     elif decision.stance == Stance.OVERVALUED:
@@ -90,6 +118,10 @@ def resolve_outcome(
         price_date_at_horizon=end.date,
         return_pct=return_pct,
         stance_was_directionally_right=directionally_right,
+        max_drawdown_pct=drawdown[0] if drawdown else None,
+        trough_close=drawdown[1].close if drawdown else None,
+        trough_date=drawdown[1].date if drawdown else None,
+        closes_observed=len(window),
     )
 
 

@@ -95,9 +95,14 @@ def main() -> int:
             verdict = {True: "right", False: "wrong", None: "no call"}[
                 outcome.stance_was_directionally_right
             ]
+            drawdown = (
+                f", worst {outcome.max_drawdown_pct:+.1%}"
+                if outcome.max_drawdown_pct is not None
+                else ""
+            )
             print(
                 f"  {decision.ticker} {decision.as_of_date}: {decision.stance.value} -> "
-                f"{outcome.return_pct:+.1%} ({verdict})"
+                f"{outcome.return_pct:+.1%} ({verdict}){drawdown}"
             )
     finally:
         market_data_client.close()

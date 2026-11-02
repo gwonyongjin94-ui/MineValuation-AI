@@ -98,6 +98,24 @@ class OutcomeRecord(BaseModel):
     # valuation can't be right or wrong about direction.
     stance_was_directionally_right: bool | None = None
 
+    # Worst peak-to-trough decline inside the holding window, as a
+    # negative fraction (-0.30 = the position was down 30% from its own
+    # running high at some point). Point-to-point return hides this
+    # entirely: a position that fell 40% and recovered reports the same
+    # return_pct as one that never moved, and those are not the same
+    # thing to hold. For an objective stated as "lose as little as
+    # possible", this is the number that measures it, so it is recorded
+    # alongside the return rather than derived later - the daily closes
+    # it comes from are already fetched and are not kept.
+    max_drawdown_pct: float | None = None
+    trough_close: float | None = None
+    trough_date: date | None = None
+    # Closes actually seen between the two endpoints. A window resolved
+    # from a sparse series (a monthly-interval history, a halted ticker)
+    # gives a drawdown that understates the real one, and there is no
+    # way to tell from max_drawdown_pct alone.
+    closes_observed: int | None = None
+
 
 class ReflectionRecord(BaseModel):
     kind: RecordKind = RecordKind.REFLECTION
